@@ -95,4 +95,9 @@ public record CameraTrack(
     public CameraTrack withFollow(boolean newFollow) {
         return new CameraTrack(id, displayName, description, worldName, start, exit, sway, newFollow, entryEffects, steps);
     }
+
+    public CameraTrack withEntryEffects(List<EffectSpec> newEntryEffects) {
+        return new CameraTrack(id, displayName, description, worldName, start, exit, sway, follow,
+                newEntryEffects, steps);
+    }
 }

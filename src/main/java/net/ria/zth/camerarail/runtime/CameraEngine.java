@@ -125,7 +125,7 @@ public final class CameraEngine implements CameraService {
 
     @Override
     public boolean play(Player player, String trackId) {
-        return playInternal(player, trackId, false);
+        return playInternal(player, trackId, false, 0, Integer.MAX_VALUE);
     }
 
     /**
@@ -133,10 +133,25 @@ public final class CameraEngine implements CameraService {
      * finish and abort.
      */
     public boolean playPreview(Player player, String trackId) {
-        return playInternal(player, trackId, true);
+        return playInternal(player, trackId, true, 0, Integer.MAX_VALUE);
     }
 
-    private boolean playInternal(Player player, String trackId, boolean preview) {
+    /**
+     * Editor preview starting at {@code startIndex}. The camera spawns at the pose the
+     * preceding steps end at; effect and title steps before the index are not replayed.
+     */
+    public boolean playPreview(Player player, String trackId, int startIndex) {
+        return playInternal(player, trackId, true, startIndex, Integer.MAX_VALUE);
+    }
+
+    /**
+     * Editor preview of the inclusive interval {@code [startIndex, endIndex]}.
+     */
+    public boolean playPreview(Player player, String trackId, int startIndex, int endIndex) {
+        return playInternal(player, trackId, true, startIndex, endIndex);
+    }
+
+    private boolean playInternal(Player player, String trackId, boolean preview, int startIndex, int endIndex) {
         if (player == null || !player.isOnline()) {
             return false;
         }
@@ -155,7 +170,7 @@ public final class CameraEngine implements CameraService {
             messages.get().send(player, "editor.world-mismatch", "world", track.worldName());
             return false;
         }
-        Session session = new Session(player, track, world, preview);
+        Session session = new Session(player, track, world, preview, startIndex, endIndex);
         Session existing = sessions.putIfAbsent(player.getUniqueId(), session);
         if (existing != null) {
             return false;
@@ -282,7 +297,7 @@ public final class CameraEngine implements CameraService {
             }
         }, () -> {
         }, 300L);
-        Location start = session.track.start().toLocation(session.world);
+        Location start = session.initialPose.toLocation(session.world);
         Bukkit.getRegionScheduler().execute(plugin, start, () -> spawnCamera(session));
     }
 
@@ -291,7 +306,7 @@ public final class CameraEngine implements CameraService {
             abandon(session);
             return;
         }
-        Location start = session.track.start().toLocation(session.world);
+        Location start = session.initialPose.toLocation(session.world);
         // The start can be far outside the player's loaded area. Without a chunk ticket
         // the freshly spawned marker exists in an unloaded chunk and every teleport
         // (even teleportAsync) fails as "cancelled".
@@ -321,7 +336,7 @@ public final class CameraEngine implements CameraService {
                 stand.setVisibleByDefault(false);
                 stand.setCustomNameVisible(false);
                 stand.setCanPickupItems(false);
-                stand.setRotation(session.track.start().yaw(), session.track.start().pitch());
+                stand.setRotation(session.initialPose.yaw(), session.initialPose.pitch());
                 stand.addScoreboardTag("zth_camera_rail");
             });
         } catch (RuntimeException exception) {
@@ -335,11 +350,14 @@ public final class CameraEngine implements CameraService {
             return;
         }
         session.camera = camera;
+        // Full-precision rotation; see PreciseCameraSync for why the default byte-quantised
+        // entity tracking is visible during slow pans.
+        PreciseCameraSync.enable(camera, plugin.getLogger());
         double eyeOffset = camera.getEyeHeight();
         session.cameraEyeOffset = Double.isFinite(eyeOffset) ? eyeOffset : 0.0;
         Location feet = start.clone().subtract(0.0, session.cameraEyeOffset, 0.0);
-        feet.setYaw(session.track.start().yaw());
-        feet.setPitch(session.track.start().pitch());
+        feet.setYaw(session.initialPose.yaw());
+        feet.setPitch(session.initialPose.pitch());
         // teleportAsync is used on Paper as well as Folia: the start chunk (and, later,
         // chunks along the route) is often outside the player's loaded area, and a
         // synchronous Entity#teleport silently fails with "cancelled" when the target
@@ -370,8 +388,8 @@ public final class CameraEngine implements CameraService {
         Player player = session.player;
         ArmorStand camera = session.camera;
         Location target = camera.getLocation().clone();
-        target.setYaw(session.track.start().yaw());
-        target.setPitch(session.track.start().pitch());
+        target.setYaw(session.initialPose.yaw());
+        target.setPitch(session.initialPose.pitch());
         applyEntryEffects(session);
         beginInternalTeleport(session, 1500L);
         try {
@@ -457,10 +475,14 @@ public final class CameraEngine implements CameraService {
         scheduleCameraCheck(session, 45L);
         session.teleportGraceUntilMillis = Math.max(session.teleportGraceUntilMillis,
                 System.currentTimeMillis() + 500L);
-        session.stepIndex = 0;
+        session.stepIndex = session.startIndex;
         session.stepTicks = 0;
         session.totalTicks = 0;
-        session.currentPose = session.track.start();
+        session.currentPose = session.initialPose;
+        session.stepFrom = session.initialPose;
+        session.pathCurve = null;
+        session.pathCurveStep = -1;
+        session.activeSway = session.initialSway.name();
         session.activeStepDescription = "准备中";
         session.tickTask = camera.getScheduler().runAtFixedRate(plugin,
                 task -> tick(session),
@@ -474,7 +496,8 @@ public final class CameraEngine implements CameraService {
         }
         if (config.get().debug()) {
             plugin.getLogger().info("Camera started: player=" + player.getName() + " track=" + session.track.id()
-                    + " world=" + session.world.getName() + " preview=" + session.preview);
+                    + " world=" + session.world.getName() + " preview=" + session.preview
+                    + " precise-sync=" + PreciseCameraSync.isAvailable());
         }
     }
 
@@ -610,6 +633,11 @@ public final class CameraEngine implements CameraService {
             if (guard-- <= 0) {
                 plugin.getLogger().warning("Camera step processing guard tripped for " + session.player.getName());
                 requestEnd(session, EndReason.ERROR, RestoreMode.ORIGINAL, true, true);
+                return;
+            }
+            if (session.endIndex >= 0 && session.stepIndex > session.endIndex) {
+                requestEnd(session, EndReason.FINISHED,
+                        session.preview ? RestoreMode.ORIGINAL : RestoreMode.EXIT, true, false);
                 return;
             }
             if (session.stepIndex >= session.track.steps().size()) {
@@ -1416,11 +1444,24 @@ public final class CameraEngine implements CameraService {
         if (session == null || session.ending.get()) {
             return;
         }
-        if (config.get().allowSneakExit()) {
+        if (canSneakExit(session)) {
             requestEnd(session, EndReason.STOPPED, RestoreMode.ORIGINAL, true, false);
         } else {
             hintLocked(session);
         }
+    }
+
+    /**
+     * Previews are always escapable with Shift; real playback is locked unless the
+     * server explicitly enables {@code session.allow-sneak-exit}.
+     */
+    public boolean canSneakExit(Player player) {
+        Session session = sessions.get(player.getUniqueId());
+        return session != null && canSneakExit(session);
+    }
+
+    private boolean canSneakExit(Session session) {
+        return !session.ending.get() && (session.preview || config.get().allowSneakExit());
     }
 
     /**

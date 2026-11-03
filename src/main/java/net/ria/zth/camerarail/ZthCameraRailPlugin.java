@@ -6,6 +6,7 @@ import net.ria.zth.camerarail.config.LoadReport;
 import net.ria.zth.camerarail.config.RailConfig;
 import net.ria.zth.camerarail.config.TrackRepository;
 import net.ria.zth.camerarail.editor.EditorManager;
+import net.ria.zth.camerarail.editor.EditorUI;
 import net.ria.zth.camerarail.listener.CameraListener;
 import net.ria.zth.camerarail.message.Messages;
 import net.ria.zth.camerarail.runtime.CameraEngine;
@@ -27,6 +28,7 @@ public final class ZthCameraRailPlugin extends JavaPlugin {
     private RecoveryStore recovery;
     private CameraEngine engine;
     private EditorManager editors;
+    private EditorUI editorUi;
     private CameraCommand command;
 
     @Override
@@ -50,11 +52,14 @@ public final class ZthCameraRailPlugin extends JavaPlugin {
 
         engine = new CameraEngine(this, tracks, recovery, () -> config, () -> messages, this::reloadEverything);
         editors = new EditorManager(this, tracks, engine, () -> config, () -> messages);
-        command = new CameraCommand(engine, tracks, editors, () -> config, () -> messages, this::reloadEverything);
+        editorUi = new EditorUI(this, editors, tracks, () -> config, () -> messages);
+        command = new CameraCommand(engine, tracks, editors, editorUi, () -> config, () -> messages,
+                this::reloadEverything);
 
         getServer().getServicesManager().register(CameraService.class, engine, this, ServicePriority.Normal);
-        getServer().getPluginManager().registerEvents(new CameraListener(engine, () -> config), this);
+        getServer().getPluginManager().registerEvents(new CameraListener(engine), this);
         getServer().getPluginManager().registerEvents(editors, this);
+        getServer().getPluginManager().registerEvents(editorUi, this);
 
         PluginCommand pluginCommand = getCommand("zth-camera");
         if (pluginCommand == null) {

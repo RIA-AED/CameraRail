@@ -2,7 +2,6 @@ package net.ria.zth.camerarail.listener;
 
 import com.destroystokyo.paper.event.player.PlayerStartSpectatingEntityEvent;
 import com.destroystokyo.paper.event.player.PlayerStopSpectatingEntityEvent;
-import net.ria.zth.camerarail.config.RailConfig;
 import net.ria.zth.camerarail.runtime.CameraEngine;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -18,8 +17,6 @@ import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.event.player.PlayerToggleSneakEvent;
 
-import java.util.function.Supplier;
-
 /**
  * All player-driven ways out of the spectator camera are funnelled here. The default
  * policy is to keep the shot locked; external teleports/game-mode changes end the session
@@ -27,11 +24,9 @@ import java.util.function.Supplier;
  */
 public final class CameraListener implements Listener {
     private final CameraEngine engine;
-    private final Supplier<RailConfig> config;
 
-    public CameraListener(CameraEngine engine, Supplier<RailConfig> config) {
+    public CameraListener(CameraEngine engine) {
         this.engine = engine;
-        this.config = config;
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
@@ -54,7 +49,7 @@ public final class CameraListener implements Listener {
         if (!event.isSneaking() || !engine.shouldLockSpectator(event.getPlayer())) {
             return;
         }
-        if (!config.get().allowSneakExit()) {
+        if (!engine.canSneakExit(event.getPlayer())) {
             event.setCancelled(true);
             engine.hintLocked(event.getPlayer());
             engine.reassertSpectator(event.getPlayer());
@@ -67,7 +62,7 @@ public final class CameraListener implements Listener {
         if (engine.isInternalSpectatorChange(player) || !engine.shouldLockSpectator(player)) {
             return;
         }
-        if (config.get().allowSneakExit()) {
+        if (engine.canSneakExit(player)) {
             engine.handleSneakExit(player);
             return;
         }

@@ -18,8 +18,15 @@ final class EditorSession {
     final Deque<UndoEntry> undo = new ArrayDeque<>();
     CameraTrack draft;
     int selected;
+    /** Screen to reopen after Esc / a preview, so closing the UI to fly does not lose the place. */
+    UiScreen uiScreen = UiScreen.OVERVIEW;
+    int uiPage;
+    int uiPoint;
+    int uiEffect;
     volatile boolean previewing;
     volatile boolean saveFailed;
+    /** Preview started from the Dialog editor: suppress chat feedback and reopen the UI later. */
+    volatile boolean uiPreview;
 
     EditorSession(UUID playerId, CameraTrack draft) {
         this.playerId = playerId;
@@ -46,5 +53,18 @@ final class EditorSession {
     }
 
     record UndoEntry(CameraTrack track, int selected) {
+    }
+
+    enum UiScreen {
+        OVERVIEW,
+        STEPS,
+        STEP_FORM,
+        PATH_POINTS,
+        PATH_POINT_FORM,
+        TRACK_SETTINGS,
+        POSE_START,
+        POSE_EXIT,
+        ENTRY_EFFECTS,
+        ENTRY_EFFECT_FORM
     }
 }

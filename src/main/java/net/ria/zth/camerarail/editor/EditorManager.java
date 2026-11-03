@@ -37,11 +37,13 @@ import org.bukkit.plugin.Plugin;
 import org.bukkit.potion.PotionEffectType;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
@@ -206,12 +208,6 @@ public final class EditorManager implements Listener {
                     .clickEvent(ClickEvent.runCommand("/zc edit select " + (i + 1)))
                     .hoverEvent(HoverEvent.showText(Component.text("点击选中步骤 " + (i + 1), NamedTextColor.GRAY)));
             player.sendMessage(line);
-        }
-    }
-
-    public void help(Player player) {
-        for (Component component : messages.get().list("editor.help")) {
-            player.sendMessage(component);
         }
     }
 
@@ -684,6 +680,7 @@ public final class EditorManager implements Listener {
         }
         repository.upsert(session.draft);
         persist(player, repository.saveAsync());
+        session.uiPreview = false;
         if (engine.playPreview(player, session.draft.id())) {
             session.previewing = true;
             messages.get().send(player, "editor.preview-started", "track", session.draft.id());
@@ -693,6 +690,7 @@ public final class EditorManager implements Listener {
                 if (editors.get(player.getUniqueId()) == session
                         && session.previewing && !engine.isPlaying(player)) {
                     session.previewing = false;
+                    session.uiPreview = false;
                     messages.get().send(player, "editor.preview-failed");
                 }
             }, () -> {
@@ -708,6 +706,7 @@ public final class EditorManager implements Listener {
             return;
         }
         if (session.previewing) {
+            session.uiPreview = false;
             engine.stop(player);
             session.previewing = false;
             messages.get().send(player, "editor.preview-stopped");
@@ -751,8 +750,12 @@ public final class EditorManager implements Listener {
         }
         EditorSession session = editors.get(event.getPlayer().getUniqueId());
         if (session != null && session.previewing) {
+            boolean ui = session.uiPreview;
             session.previewing = false;
-            messages.get().send(event.getPlayer(), "editor.preview-ended");
+            session.uiPreview = false;
+            if (!ui) {
+                messages.get().send(event.getPlayer(), "editor.preview-ended");
+            }
         }
     }
 
@@ -890,7 +893,7 @@ public final class EditorManager implements Listener {
         };
     }
 
-    private static PotionEffectType resolveEffect(String raw) {
+    public static PotionEffectType resolveEffect(String raw) {
         String normalized = raw.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
         normalized = switch (normalized) {
             case "slow" -> "slowness";
@@ -903,6 +906,191 @@ public final class EditorManager implements Listener {
         }
         NamespacedKey key = NamespacedKey.fromString(normalized);
         return key == null ? null : Registry.EFFECT.get(key);
+    }
+
+    // ------------------------------------------------------------------ dialog editor API
+
+    /**
+     * Session owned by the player, or {@code null}. Dialog actions run on the player's
+     * scheduler, the same thread that owns the session.
+     */
+    EditorSession session(Player player) {
+        return editors.get(player.getUniqueId());
+    }
+
+    /**
+     * Replaces the whole draft. Returns {@code null} on success, or a user-facing error.
+     * The caller is responsible for running on the player's scheduler.
+     */
+    String applyDraft(Player player, CameraTrack updated, int selected) {
+        EditorSession session = editors.get(player.getUniqueId());
+        if (session == null) {
+            return "你当前不在编辑模式.";
+        }
+        String error = validateDraft(session, updated);
+        if (error != null) {
+            return error;
+        }
+        session.remember();
+        session.draft = updated;
+        session.selected = updated.steps().isEmpty()
+                ? -1
+                : Math.max(0, Math.min(selected, updated.steps().size() - 1));
+        persisted(player, session);
+        return null;
+    }
+
+    /**
+     * Appends a step and selects it. Returns {@code null} on success, or a user-facing error.
+     */
+    String addStep(Player player, Step step) {
+        EditorSession session = editors.get(player.getUniqueId());
+        if (session == null) {
+            return "你当前不在编辑模式.";
+        }
+        if (step == null) {
+            return "步骤无效.";
+        }
+        List<Step> steps = new ArrayList<>(session.draft.steps());
+        steps.add(step);
+        CameraTrack updated = session.draft.withSteps(steps);
+        String error = validateDraft(session, updated);
+        if (error != null) {
+            return error;
+        }
+        session.remember();
+        session.draft = updated;
+        session.selected = steps.size() - 1;
+        persisted(player, session);
+        return null;
+    }
+
+    /**
+     * Undoes one edit without chat feedback. Returns false when there is nothing to undo.
+     */
+    boolean undoQuiet(Player player) {
+        EditorSession session = editors.get(player.getUniqueId());
+        if (session == null || !session.restore()) {
+            return false;
+        }
+        persisted(player, session);
+        return true;
+    }
+
+    /**
+     * Starts a UI preview at {@code startIndex} without chat feedback. The end event is
+     * handled by {@link EditorUI}, which reopens the editor.
+     */
+    boolean startPreview(Player player, int startIndex) {
+        return startPreview(player, startIndex, -1);
+    }
+
+    /**
+     * Starts a UI preview of the inclusive interval {@code [startIndex, endIndex]}. A
+     * negative {@code endIndex} means "to the end of the track".
+     */
+    boolean startPreview(Player player, int startIndex, int endIndex) {
+        EditorSession session = editors.get(player.getUniqueId());
+        if (session == null || session.previewing || engine.isPlaying(player)) {
+            return false;
+        }
+        if (session.draft.steps().isEmpty()) {
+            return false;
+        }
+        int index = Math.max(0, Math.min(startIndex, session.draft.steps().size() - 1));
+        int last = session.draft.steps().size() - 1;
+        int end = endIndex < 0 ? last : Math.max(index, Math.min(endIndex, last));
+        repository.upsert(session.draft);
+        persist(player, repository.saveAsync());
+        session.previewing = true;
+        session.uiPreview = true;
+        boolean started;
+        try {
+            started = engine.playPreview(player, session.draft.id(), index, end);
+        } catch (RuntimeException exception) {
+            plugin.getLogger().log(java.util.logging.Level.SEVERE,
+                    "Could not start camera preview for " + player.getName(), exception);
+            started = false;
+        }
+        if (!started) {
+            session.previewing = false;
+            session.uiPreview = false;
+            return false;
+        }
+        // A canceled CameraTrackStartEvent produces no end event. Release the flag so the
+        // UI can be reopened instead of leaving the editor locked in "previewing".
+        player.getScheduler().execute(plugin, () -> {
+            if (editors.get(player.getUniqueId()) == session
+                    && session.previewing && !engine.isPlaying(player)) {
+                session.previewing = false;
+                session.uiPreview = false;
+            }
+        }, () -> {
+        }, 5L);
+        return true;
+    }
+
+    /**
+     * Stops a UI preview. The end event reopens the editor; this method intentionally
+     * leaves {@code previewing} set so the normal end handling runs.
+     */
+    boolean stopPreviewQuiet(Player player) {
+        EditorSession session = editors.get(player.getUniqueId());
+        if (session == null || !session.previewing) {
+            return false;
+        }
+        session.uiPreview = true;
+        return engine.stop(player);
+    }
+
+    private String validateDraft(EditorSession session, CameraTrack updated) {
+        if (updated == null) {
+            return "轨道数据无效.";
+        }
+        if (!updated.id().equals(session.draft.id())) {
+            return "轨道 id 不能在这里修改.";
+        }
+        if (!updated.worldName().equals(session.worldName)) {
+            return "轨道世界不能在这里修改.";
+        }
+        if (updated.steps().size() > config.get().maxSteps()) {
+            return "步骤数上限 " + config.get().maxSteps() + ".";
+        }
+        if (updated.timedDurationTicks() > config.get().maxTrackTicks()) {
+            return "总时长上限 " + config.get().maxTrackTicks() + "t.";
+        }
+        Set<String> signals = new HashSet<>();
+        for (Step step : updated.steps()) {
+            if (step instanceof WaitStep wait && !signals.add(wait.signal())) {
+                return "等待信号 " + wait.signal() + " 重复.";
+            }
+            if (step instanceof PathStep path && path.points().size() > config.get().maxPathPoints()) {
+                return "路径点上限 " + config.get().maxPathPoints() + ".";
+            }
+            if (step instanceof TitleStep title) {
+                String error = validateMiniMessage(title.title(), "标题");
+                if (error != null) {
+                    return error;
+                }
+                error = validateMiniMessage(title.subtitle(), "副标题");
+                if (error != null) {
+                    return error;
+                }
+            }
+        }
+        return null;
+    }
+
+    private static String validateMiniMessage(String text, String label) {
+        if (text == null || text.isBlank()) {
+            return null;
+        }
+        try {
+            STRICT.deserialize(text);
+            return null;
+        } catch (RuntimeException exception) {
+            return label + "不是合法的 MiniMessage.";
+        }
     }
 
     public Optional<String> editingTrack(Player player) {

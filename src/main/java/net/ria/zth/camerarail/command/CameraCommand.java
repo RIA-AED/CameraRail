@@ -1,14 +1,11 @@
 package net.ria.zth.camerarail.command;
 
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.format.NamedTextColor;
 import net.ria.zth.camerarail.config.RailConfig;
 import net.ria.zth.camerarail.config.TrackRepository;
 import net.ria.zth.camerarail.editor.EditorManager;
+import net.ria.zth.camerarail.editor.EditorUI;
 import net.ria.zth.camerarail.message.Messages;
 import net.ria.zth.camerarail.model.CameraTrack;
-import net.ria.zth.camerarail.model.Easing;
-import net.ria.zth.camerarail.model.SwayPreset;
 import net.ria.zth.camerarail.runtime.CameraEngine;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
@@ -29,25 +26,20 @@ import java.util.function.Supplier;
  * the editor without a second plugin or a GUI framework.
  */
 public final class CameraCommand implements CommandExecutor, TabCompleter {
-    private static final List<String> ROOT = List.of("help", "list", "info", "play", "stop", "advance",
-            "reload", "create", "delete", "edit");
-    private static final List<String> EDIT = List.of("open", "create", "status", "list", "help", "start", "exit",
-            "add", "cut", "path", "point", "unpoint", "hold", "wait", "effect", "title", "here", "select",
-            "duration", "easing", "sway", "track-sway", "follow", "display", "up", "down", "remove", "undo",
-            "preview", "stop", "save", "done", "close", "delete");
-
     private final CameraEngine engine;
     private final TrackRepository repository;
     private final EditorManager editors;
+    private final EditorUI editorUi;
     private final Supplier<RailConfig> config;
     private final Supplier<Messages> messages;
     private final IntSupplier reloadAction;
 
-    public CameraCommand(CameraEngine engine, TrackRepository repository, EditorManager editors,
+    public CameraCommand(CameraEngine engine, TrackRepository repository, EditorManager editors, EditorUI editorUi,
                          Supplier<RailConfig> config, Supplier<Messages> messages, IntSupplier reloadAction) {
         this.engine = engine;
         this.repository = repository;
         this.editors = editors;
+        this.editorUi = editorUi;
         this.config = config;
         this.messages = messages;
         this.reloadAction = reloadAction;
@@ -60,55 +52,51 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
             return true;
         }
         if (args.length == 0) {
-            help(sender, label);
+            help(sender, args, label);
             return true;
         }
         String action = args[0].toLowerCase(Locale.ROOT);
+        // Keep this switch in sync with CommandHelp.ROOT_ENTRIES: the table drives /zc help
+        // and tab completion.
         switch (action) {
-            case "help" -> help(sender, label);
-            case "list" -> list(sender);
-            case "info" -> info(sender, args);
+            case "help" -> help(sender, args, label);
+            case "list" -> list(sender, label);
+            case "info" -> info(sender, args, label);
             case "play" -> play(sender, args, label);
             case "stop" -> stop(sender, args, label);
             case "advance" -> advance(sender, args, label);
             case "reload" -> reload(sender);
-            case "create" -> create(sender, args);
+            case "create" -> create(sender, args, label);
             case "delete" -> delete(sender, args, label);
             case "edit" -> edit(sender, args, label);
-            default -> messages.get().send(sender, "command.unknown-subcommand", "arg", action);
+            default -> messages.get().send(sender, "command.unknown-subcommand", "arg", action, "label", label);
         }
         return true;
     }
 
-    private void help(CommandSender sender, String label) {
-        sender.sendMessage(messages.get().prefixed("command.usage", "usage", "/" + label + " help"));
-        line(sender, "<gray>轨道: <white>/" + label + " list</white> <dark_gray>·</dark_gray> <white>/" + label
-                + " info [id]</white> <dark_gray>·</dark_gray> <white>/" + label + " play [id] [玩家]</white>");
-        line(sender, "<gray>流程: <white>/" + label + " advance [信号] [玩家]</white> <dark_gray>·</dark_gray> <white>/"
-                + label + " stop [玩家]</white>");
-        line(sender, "<gray>编辑: <white>/" + label + " edit open [id]</white> <dark_gray>·</dark_gray> <white>/"
-                + label + " edit help</white>");
-        line(sender, "<gray>管理: <white>/" + label + " reload</white> <dark_gray>·</dark_gray> <white>/" + label
-                + " delete [id] confirm</white>");
+    private void help(CommandSender sender, String[] args, String label) {
+        CommandHelp help = new CommandHelp(messages.get(), label, sender::hasPermission);
+        if (args.length >= 2) {
+            help.sendDetail(sender, CommandHelp.Scope.ROOT, args[1]);
+        } else {
+            help.sendOverview(sender, CommandHelp.Scope.ROOT);
+        }
     }
 
-    private void line(CommandSender sender, String miniMessage) {
-        sender.sendMessage(messages.get().prefixComponent().append(messages.get().deserialize(miniMessage)));
-    }
-
-    private void list(CommandSender sender) {
+    private void list(CommandSender sender, String label) {
         if (!require(sender, "zth.camera.command")) {
             return;
         }
         var tracks = new ArrayList<>(repository.all().values());
         tracks.sort((left, right) -> left.id().compareTo(right.id()));
         if (tracks.isEmpty()) {
-            messages.get().send(sender, "track.list-empty");
+            messages.get().send(sender, "track.list-empty", "label", label);
             return;
         }
         messages.get().send(sender, "track.list-header", "count", String.valueOf(tracks.size()));
         for (CameraTrack track : tracks) {
             messages.get().send(sender, "track.list-entry",
+                    "label", label,
                     "id", track.id(),
                     "name", track.displayName(),
                     "steps", String.valueOf(track.steps().size()),
@@ -116,9 +104,9 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
         }
     }
 
-    private void info(CommandSender sender, String[] args) {
+    private void info(CommandSender sender, String[] args, String label) {
         if (args.length < 2) {
-            messages.get().send(sender, "command.usage", "usage", "/zth-camera info [id]");
+            messages.get().send(sender, "command.usage", "usage", "/" + label + " info <id>");
             return;
         }
         CameraTrack track = repository.get(args[1]);
@@ -139,7 +127,7 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
         if (!track.description().isBlank()) {
             infoLine(sender, "说明", track.description());
         }
-        sender.sendMessage(messages.get().prefixed("track.info-preview", "id", track.id()));
+        sender.sendMessage(messages.get().prefixed("track.info-preview", "id", track.id(), "label", label));
         if (track.steps().isEmpty()) {
             messages.get().send(sender, "track.info-no-steps");
         }
@@ -158,7 +146,7 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
             // Convenience for a login/transition server with a single configured shot.
             var tracks = repository.all();
             if (tracks.size() != 1) {
-                messages.get().send(sender, "command.usage", "usage", "/" + label + " play [id] [玩家]");
+                messages.get().send(sender, "command.usage", "usage", "/" + label + " play <id> [玩家]");
                 return;
             }
             trackId = tracks.keySet().iterator().next();
@@ -176,7 +164,7 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
         }
         if (engine.isPlaying(target)) {
             if (target.equals(sender)) {
-                messages.get().send(sender, "track.already-playing");
+                messages.get().send(sender, "track.already-playing", "label", label);
             } else {
                 messages.get().send(sender, "track.play-failed", "track", track.id(),
                         "reason", "该玩家已在镜头中");
@@ -221,7 +209,7 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
         }
         if (args.length < 2) {
             messages.get().send(sender, "command.usage",
-                    "usage", "/" + label + " advance [信号|*] [玩家]");
+                    "usage", "/" + label + " advance <信号|*> [玩家]");
             return;
         }
         Player target = target(sender, args.length >= 3 ? args[2] : null);
@@ -259,7 +247,7 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
         }
     }
 
-    private void create(CommandSender sender, String[] args) {
+    private void create(CommandSender sender, String[] args, String label) {
         if (!require(sender, "zth.camera.manage") || !require(sender, "zth.camera.edit")) {
             return;
         }
@@ -268,7 +256,7 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
             return;
         }
         if (args.length < 2) {
-            messages.get().send(sender, "command.usage", "usage", "/zth-camera create [id] [名称]");
+            messages.get().send(sender, "command.usage", "usage", "/" + label + " create <id> [名称]");
             return;
         }
         String display = args.length >= 3 ? String.join(" ", java.util.Arrays.copyOfRange(args, 2, args.length)) : "";
@@ -280,7 +268,7 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
             return;
         }
         if (args.length < 2) {
-            messages.get().send(sender, "command.usage", "usage", "/" + label + " delete [id] confirm");
+            messages.get().send(sender, "command.usage", "usage", "/" + label + " delete <id> confirm");
             return;
         }
         CameraTrack track = repository.get(args[1]);
@@ -313,11 +301,25 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
         if (!require(sender, "zth.camera.edit")) {
             return;
         }
+        if (args.length >= 2 && args[1].equalsIgnoreCase("help")) {
+            // Read-only reference, so the console may open it too.
+            CommandHelp help = new CommandHelp(messages.get(), label, sender::hasPermission);
+            if (args.length >= 3) {
+                help.sendDetail(sender, CommandHelp.Scope.EDITOR, args[2]);
+            } else {
+                help.sendOverview(sender, CommandHelp.Scope.EDITOR);
+            }
+            return;
+        }
         if (!(sender instanceof Player player)) {
             messages.get().send(sender, "command.player-only");
             return;
         }
-        if (args.length == 1 || args[1].equalsIgnoreCase("status")) {
+        if (args.length == 1) {
+            editorUi.open(player);
+            return;
+        }
+        if (args[1].equalsIgnoreCase("status")) {
             editors.status(player);
             return;
         }
@@ -326,18 +328,20 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
                 && !require(sender, "zth.camera.manage")) {
             return;
         }
+        // Keep this switch in sync with CommandHelp.EDITOR_ENTRIES: the table drives
+        // /zc edit help and tab completion.
         switch (action) {
-            case "help" -> editors.help(player);
+            case "gui" -> editorUi.open(player);
             case "open" -> {
                 if (args.length < 3) {
-                    messages.get().send(sender, "command.usage", "usage", "/" + label + " edit open [id]");
+                    messages.get().send(sender, "command.usage", "usage", "/" + label + " edit open <id>");
                     return;
                 }
                 editors.open(player, args[2]);
             }
             case "create" -> {
                 if (args.length < 3) {
-                    messages.get().send(sender, "command.usage", "usage", "/" + label + " edit create [id] [名称]");
+                    messages.get().send(sender, "command.usage", "usage", "/" + label + " edit create <id> [名称]");
                     return;
                 }
                 String display = args.length >= 4
@@ -358,7 +362,7 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
             case "point" -> editors.addPathPoint(player);
             case "unpoint" -> editors.removePathPoint(player);
             case "hold" -> {
-                Integer ticks = requiredInt(sender, args, 2, "/" + label + " edit hold [ticks]");
+                Integer ticks = requiredInt(sender, args, 2, "/" + label + " edit hold <时长>");
                 if (ticks != null) {
                     editors.addHold(player, ticks);
                 }
@@ -401,41 +405,41 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
             }
             case "here" -> editors.updateHere(player);
             case "select" -> {
-                Integer index = requiredInt(sender, args, 2, "/" + label + " edit select [index]");
+                Integer index = requiredInt(sender, args, 2, "/" + label + " edit select <索引>");
                 if (index != null) {
                     editors.select(player, index);
                 }
             }
             case "duration" -> {
-                Integer ticks = requiredInt(sender, args, 2, "/" + label + " edit duration [ticks]");
+                Integer ticks = requiredInt(sender, args, 2, "/" + label + " edit duration <时长>");
                 if (ticks != null) {
                     editors.setDuration(player, ticks);
                 }
             }
             case "easing" -> {
                 if (args.length < 3) {
-                    messages.get().send(sender, "command.usage", "usage", "/" + label + " edit easing [曲线]");
+                    messages.get().send(sender, "command.usage", "usage", "/" + label + " edit easing <曲线>");
                     return;
                 }
                 editors.setEasing(player, args[2]);
             }
             case "sway" -> {
                 if (args.length < 3) {
-                    messages.get().send(sender, "command.usage", "usage", "/" + label + " edit sway [预设]");
+                    messages.get().send(sender, "command.usage", "usage", "/" + label + " edit sway <预设>");
                     return;
                 }
                 editors.setStepSway(player, args[2]);
             }
             case "track-sway" -> {
                 if (args.length < 3) {
-                    messages.get().send(sender, "command.usage", "usage", "/" + label + " edit track-sway [预设]");
+                    messages.get().send(sender, "command.usage", "usage", "/" + label + " edit track-sway <预设>");
                     return;
                 }
                 editors.setTrackSway(player, args[2]);
             }
             case "follow" -> {
                 if (args.length < 3 || (!args[2].equalsIgnoreCase("true") && !args[2].equalsIgnoreCase("false"))) {
-                    messages.get().send(sender, "command.usage", "usage", "/" + label + " edit follow [true|false]");
+                    messages.get().send(sender, "command.usage", "usage", "/" + label + " edit follow <true|false>");
                     return;
                 }
                 editors.setFollow(player, Boolean.parseBoolean(args[2]));
@@ -456,7 +460,7 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
             case "save" -> editors.save(player);
             case "done", "close" -> editors.close(player);
             case "delete" -> editors.delete(player, args.length >= 3 && args[2].equalsIgnoreCase("confirm"));
-            default -> messages.get().send(sender, "command.unknown-subcommand", "arg", action);
+            default -> messages.get().send(sender, "command.unknown-subcommand", "arg", action, "label", label);
         }
     }
 
@@ -519,8 +523,12 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
         if (!sender.hasPermission("zth.camera.command")) {
             return List.of();
         }
+        CommandHelp help = new CommandHelp(messages.get(), alias, sender::hasPermission);
         if (args.length == 1) {
-            return partial(args[0], ROOT.stream().filter(action -> canUse(sender, action)).toList());
+            List<String> names = new ArrayList<>();
+            names.add("help");
+            names.addAll(help.names(CommandHelp.Scope.ROOT));
+            return partial(args[0], names);
         }
         String action = args[0].toLowerCase(Locale.ROOT);
         if (args.length == 2) {
@@ -528,7 +536,10 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
                 case "play", "info", "delete" -> partial(args[1], trackIds());
                 case "stop" -> partial(args[1], playerNames());
                 case "advance" -> partial(args[1], advanceSuggestions(sender));
-                case "edit" -> partial(args[1], EDIT.stream().filter(edit -> canUseEdit(sender, edit)).toList());
+                case "help" -> partial(args[1], help.names(CommandHelp.Scope.ROOT));
+                case "edit" -> sender.hasPermission("zth.camera.edit")
+                        ? partial(args[1], help.names(CommandHelp.Scope.EDITOR))
+                        : List.of();
                 default -> List.of();
             };
         }
@@ -539,12 +550,13 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
             if (action.equals("delete")) {
                 return partial(args[2], List.of("confirm"));
             }
-            if (action.equals("edit")) {
+            if (action.equals("edit") && sender.hasPermission("zth.camera.edit")) {
                 String edit = args[1].toLowerCase(Locale.ROOT);
                 return switch (edit) {
                     case "open" -> partial(args[2], trackIds());
                     case "select" -> partial(args[2], stepNumbers(sender));
                     case "wait" -> partial(args[2], allWaitSignals());
+                    case "help" -> partial(args[2], help.names(CommandHelp.Scope.EDITOR));
                     case "easing" -> partial(args[2], List.of("linear", "ease-in", "ease-out",
                             "ease-in-out", "smoothstep", "smootherstep", "sine"));
                     case "sway" -> partial(args[2], List.of("inherit", "off", "gentle", "natural", "strong"));
@@ -563,27 +575,6 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
             }
         }
         return List.of();
-    }
-
-    private boolean canUse(CommandSender sender, String action) {
-        return switch (action) {
-            case "play" -> sender.hasPermission("zth.camera.play");
-            case "stop" -> sender.hasPermission("zth.camera.stop");
-            case "advance" -> sender.hasPermission("zth.camera.advance");
-            case "reload" -> sender.hasPermission("zth.camera.reload");
-            case "create", "delete" -> sender.hasPermission("zth.camera.manage")
-                    && sender.hasPermission("zth.camera.edit");
-            case "edit" -> sender.hasPermission("zth.camera.edit");
-            default -> true;
-        };
-    }
-
-    private boolean canUseEdit(CommandSender sender, String edit) {
-        if (!sender.hasPermission("zth.camera.edit")) {
-            return false;
-        }
-        return (!edit.equals("create") && !edit.equals("delete"))
-                || sender.hasPermission("zth.camera.manage");
     }
 
     private List<String> trackIds() {

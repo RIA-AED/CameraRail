@@ -43,8 +43,16 @@ public final class Messages {
             YamlConfiguration external = YamlConfiguration.loadConfiguration(file);
             flatten(external, "", merged);
         }
-        Object prefix = merged.get("prefix");
-        return new Messages(merged, prefix instanceof String string ? string : "");
+        return of(merged);
+    }
+
+    /**
+     * Builds a message set from an already flattened {@code key -> value} map. Exposed so tests
+     * and embedders can render the bundled messages without a running plugin instance.
+     */
+    public static Messages of(Map<String, Object> values) {
+        Object prefix = values.get("prefix");
+        return new Messages(values, prefix instanceof String string ? string : "");
     }
 
     public Component component(String path, String... placeholders) {
@@ -80,16 +88,16 @@ public final class Messages {
         player.sendActionBar(component(path, placeholders));
     }
 
-    public List<Component> list(String path, String... placeholders) {
+    /** Raw list entries with placeholders substituted, for callers that lay out the text. */
+    public List<String> strings(String path, String... placeholders) {
         Object value = values.get(path);
-        List<Component> result = new ArrayList<>();
+        List<String> result = new ArrayList<>();
         if (value instanceof List<?> list) {
             for (Object entry : list) {
-                String raw = String.valueOf(entry);
-                result.add(deserialize(replace(raw, placeholders)));
+                result.add(replace(String.valueOf(entry), placeholders));
             }
         } else if (value instanceof String string) {
-            result.add(deserialize(replace(string, placeholders)));
+            result.add(replace(string, placeholders));
         }
         return List.copyOf(result);
     }
@@ -99,16 +107,14 @@ public final class Messages {
         return value instanceof String string ? string : null;
     }
 
-    public String prefix() {
-        return prefix;
+    /** Raw text with placeholders substituted, for callers that lay out the text themselves. */
+    public String string(String path, String... placeholders) {
+        String raw = string(path);
+        return raw == null ? null : replace(raw, placeholders);
     }
 
-    public Component deserialize(String raw) {
-        try {
-            return miniMessage.deserialize(raw);
-        } catch (RuntimeException exception) {
-            return Component.text(raw);
-        }
+    public String prefix() {
+        return prefix;
     }
 
     private static String replace(String raw, String... placeholders) {

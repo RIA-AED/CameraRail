@@ -7,6 +7,7 @@ import net.ria.zth.camerarail.model.CameraTrack;
 import net.ria.zth.camerarail.model.CameraStep;
 import net.ria.zth.camerarail.model.Pose;
 import net.ria.zth.camerarail.model.Step;
+import net.ria.zth.camerarail.model.SwayPreset;
 import net.ria.zth.camerarail.model.WaitStep;
 import org.bukkit.World;
 import org.bukkit.entity.ArmorStand;
@@ -39,6 +40,14 @@ final class Session {
     final CameraTrack track;
     final World world;
     final boolean preview;
+    /** First step to run; non-zero when the editor previews from a selected step. */
+    final int startIndex;
+    /** Last step to run (inclusive); used to preview a single step. */
+    final int endIndex;
+    /** Pose the camera starts at (the end pose of the steps before {@link #startIndex}). */
+    final Pose initialPose;
+    /** Sway override active when the session starts. */
+    final SwayPreset initialSway;
     final long startedAtMillis;
 
     final AtomicBoolean ending = new AtomicBoolean();
@@ -90,14 +99,22 @@ final class Session {
 
     final SwayAnimator swayAnimator;
 
-    Session(Player player, CameraTrack track, World world, boolean preview) {
+    Session(Player player, CameraTrack track, World world, boolean preview, int startIndex, int endIndex) {
         this.player = player;
         this.playerId = player.getUniqueId();
         this.track = track;
         this.world = world;
         this.preview = preview;
+        this.startIndex = TrackTimeline.clampStep(track, startIndex);
+        int size = track.steps().size();
+        this.endIndex = size == 0 ? -1 : Math.max(this.startIndex, Math.min(endIndex, size - 1));
+        this.initialPose = TrackTimeline.poseAtStepStart(track, this.startIndex);
+        this.initialSway = TrackTimeline.swayAtStepStart(track, this.startIndex);
         this.startedAtMillis = System.currentTimeMillis();
-        this.currentPose = track.start();
+        this.currentPose = initialPose;
+        this.stepFrom = initialPose;
+        this.stepIndex = this.startIndex;
+        this.activeSway = initialSway.name();
         this.swayAnimator = new SwayAnimator(track.sway());
     }
 
