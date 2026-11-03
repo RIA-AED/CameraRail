@@ -99,6 +99,20 @@ final class Session {
 
     final SwayAnimator swayAnimator;
 
+    /** Debug trace state. Only touched by the camera entity's scheduler thread. */
+    Pose tracePose;
+    int traceTicks;
+    int traceDeferred;
+    int traceWireSteps;
+    double traceWireMax;
+    double traceMaxYaw;
+    double traceMaxPitch;
+    double traceMaxPos;
+    boolean traceEntitySeen;
+    float traceEntityYaw;
+    double traceEntityMax;
+    int traceStale;
+
     Session(Player player, CameraTrack track, World world, boolean preview, int startIndex, int endIndex) {
         this.player = player;
         this.playerId = player.getUniqueId();

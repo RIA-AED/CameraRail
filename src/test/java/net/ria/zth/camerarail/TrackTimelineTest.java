@@ -3,6 +3,7 @@ package net.ria.zth.camerarail;
 import net.ria.zth.camerarail.model.CameraTrack;
 import net.ria.zth.camerarail.model.CutStep;
 import net.ria.zth.camerarail.model.Easing;
+import net.ria.zth.camerarail.model.ExitMode;
 import net.ria.zth.camerarail.model.HoldStep;
 import net.ria.zth.camerarail.model.MoveStep;
 import net.ria.zth.camerarail.model.PathStep;
@@ -34,7 +35,7 @@ class TrackTimelineTest {
                 new HoldStep(5, SwayPreset.INHERIT)
         );
         track = new CameraTrack("test", "Test", "", "world",
-                new Pose(0, 0, 0, 0, 0), null,
+                new Pose(0, 0, 0, 0, 0), ExitMode.ANIMATION_END, null,
                 SwaySettings.ofPreset(SwayPreset.NATURAL, 160, 42),
                 true, List.of(), steps);
     }

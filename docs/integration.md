@@ -145,7 +145,7 @@ public void onCameraEnd(CameraTrackEndEvent event) {
 }
 ```
 
-`completed` 只在自然走完并成功传送到 `exit` 时为 `true`。中止、超时、外部传送、退出等均为 `false`。`preview` 为编辑器预览。
+`completed` 只在自然走完并成功把玩家放到 `exit-mode` 指定的位置时为 `true`。中止、超时、外部传送、退出等均为 `false`。`preview` 为编辑器预览。
 
 `EndReason`：`FINISHED`、`STOPPED`、`QUIT`、`KICKED`、`TIMEOUT`、`LIMIT`、`CAMERA_LOST`、`EXTERNAL_TELEPORT`、`GAME_MODE_CHANGE`、`WORLD_CHANGE`、`DEATH`、`ERROR`、`RECOVERED`。
 

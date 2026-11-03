@@ -17,6 +17,7 @@ import net.ria.zth.camerarail.model.Easing;
 import net.ria.zth.camerarail.model.EffectAction;
 import net.ria.zth.camerarail.model.EffectSpec;
 import net.ria.zth.camerarail.model.EffectStep;
+import net.ria.zth.camerarail.model.ExitMode;
 import net.ria.zth.camerarail.model.HoldStep;
 import net.ria.zth.camerarail.model.MoveStep;
 import net.ria.zth.camerarail.model.PathStep;
@@ -135,8 +136,8 @@ public final class EditorManager implements Listener {
         SwaySettings sway = SwaySettings.ofPreset(cfg.defaultSwayPreset(), cfg.defaultSwayPeriod(),
                 TrackParser.defaultSeed(id));
         CameraTrack track = new CameraTrack(id, displayName == null || displayName.isBlank() ? id : displayName,
-                "", player.getWorld().getName(), start, null, sway, cfg.followCamera(), List.of(),
-                List.of(new HoldStep(20, SwayPreset.INHERIT)));
+                "", player.getWorld().getName(), start, ExitMode.ANIMATION_END, null, sway,
+                cfg.followCamera(), List.of(), List.of(new HoldStep(20, SwayPreset.INHERIT)));
         repository.upsert(track);
         EditorSession session = new EditorSession(player.getUniqueId(), track);
         editors.put(player.getUniqueId(), session);
@@ -239,6 +240,21 @@ public final class EditorManager implements Listener {
         session.draft = session.draft.withExit(pose);
         persisted(player, session);
         messages.get().send(player, "editor.exit-set");
+    }
+
+    public void setExitMode(Player player, ExitMode mode) {
+        EditorSession session = requireEditor(player);
+        if (session == null) {
+            return;
+        }
+        if (mode == ExitMode.CUSTOM) {
+            messages.get().send(player, "editor.exit-mode-custom");
+            return;
+        }
+        session.remember();
+        session.draft = session.draft.withExitMode(mode);
+        persisted(player, session);
+        messages.get().send(player, "editor.exit-mode-set", "mode", mode.configName());
     }
 
     public void addMove(Player player, int duration) {

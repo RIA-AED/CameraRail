@@ -74,6 +74,8 @@ editor:
   selected: "<gray>已选中步骤 <white>{index}</white>: {summary}"
   start-set: "<gray>起点已更新为当前位置."
   exit-set: "<gray>退出点已更新为当前脚下位置."
+  exit-mode-set: "<gray>退出点已改为 <white>{mode}</white>."
+  exit-mode-custom: "<gray>自定义退出点请用 <white>/zth-camera edit exit</white> 取当前脚下位置."
   added: "<gray>已追加步骤 <white>{index}</white>: {summary}"
   updated: "<gray>已更新步骤 <white>{index}</white>: {summary}"
   removed: "<gray>已删除步骤 <white>{index}</white>."
@@ -118,7 +120,7 @@ editor:
   select-usage: "<gray>用法: <white>/zth-camera edit select <索引></white>."
   no-permission: "<gray>你没有权限编辑轨道."
   duplicate-signal: "<gray>等待信号 <white>{signal}</white> 已存在."
-  invalid-effect: "<gray>未知的药水效果 <white>{effect}</white>. 可以使用 blindness、darkness、slowness 或带命名空间的 id."
+  invalid-effect: "<gray>未知的药水效果 <white>{effect}</white>. 可以使用 darkness、nausea、night_vision 或带命名空间的 id."
   invalid-title: "<gray>标题文本不是合法的 MiniMessage."
   invalid-value: "<gray>无效的值 <white>{value}</white>."
   limit: "<gray>已达到限制: <white>{limit}</white>."
@@ -245,8 +247,13 @@ help:
         summary: "把轨道起点设为当前视角"
         detail: "起点是镜头眼睛的位置，通常要高于地面."
       exit:
-        summary: "把退出点设为当前脚下位置"
-        detail: "退出点决定镜头结束后站的位置；省略时回到进入前的位置."
+        summary: "把退出点设为自定义的当前脚下位置"
+        detail: "用于 exit-mode: custom；省略 exit-mode 时默认停在镜头最后位置."
+      exit-mode:
+        summary: "设置退出点模式"
+        detail: "animation-end 停在镜头最后位置（默认），pre-entry 回到进入前位置；custom 用 exit 取当前脚下位置."
+        args:
+          - "<模式> animation-end 或 pre-entry"
       display:
         summary: "设置轨道显示名称"
         detail: "显示名称用于列表和提示，可以与 id 不同."

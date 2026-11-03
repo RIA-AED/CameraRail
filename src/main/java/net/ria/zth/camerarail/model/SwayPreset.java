@@ -3,15 +3,21 @@ package net.ria.zth.camerarail.model;
 import java.util.Locale;
 
 /**
- * Step-level sway override. Amplitudes are intentionally small: the camera should feel
- * alive, not like it is being shaken.
+ * Step-level sway override. The three moving presets form a ladder of roughly 2.1x per step:
+ * what used to be "natural" is now "gentle", what used to be "strong" is now "natural", and
+ * "strong" is one step above that, big enough to be clearly visible on purpose.
+ *
+ * <p>No preset turns the view left or right: {@code yaw} is always zero, so the camera drifts
+ * and nods instead of panning. That keeps the breathing feel while removing the horizontal
+ * rotation, which some clients render with an occasional short "catch-up" flick. A track or
+ * step that really wants the old panning sway can still set {@code yaw} in its YAML map.</p>
  */
 public enum SwayPreset {
     INHERIT(0.0, 0.0, 0.0, 0.0, 0.0),
     OFF(0.0, 0.0, 0.0, 0.0, 0.0),
-    GENTLE(0.012, 0.008, 0.010, 0.12, 0.05),
-    NATURAL(0.028, 0.016, 0.022, 0.28, 0.10),
-    STRONG(0.060, 0.035, 0.050, 0.60, 0.22);
+    GENTLE(0.042, 0.024, 0.033, 0.0, 0.15),
+    NATURAL(0.090, 0.053, 0.075, 0.0, 0.33),
+    STRONG(0.195, 0.113, 0.165, 0.0, 0.70);
 
     private final double x;
     private final double y;

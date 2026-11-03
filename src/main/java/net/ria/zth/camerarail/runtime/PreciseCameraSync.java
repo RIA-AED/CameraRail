@@ -2,6 +2,7 @@ package net.ria.zth.camerarail.runtime;
 
 import org.bukkit.entity.Entity;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -21,17 +22,22 @@ import java.util.logging.Logger;
  * three-tick cadence; the client still interpolates over those three ticks, so the
  * motion is continuous and the camera keeps the same responsiveness as before. Paper
  * does not expose the flag through its API, so this bridge uses the mapped server
- * method; if it is absent in a future server version the camera simply keeps the
- * vanilla quantised tracking, so the plugin still works.</p>
+ * method, and falls back to writing the flag field when a build renames the setter.
+ * {@link #readFlag(Entity)} reports whether the flag actually reads back, and when
+ * neither works the camera simply keeps the vanilla quantised tracking.</p>
  */
 final class PreciseCameraSync {
     private static final Object LOCK = new Object();
+    private static final String FLAG_NAME = "requiresPrecisePosition";
 
     private static volatile boolean resolved;
     private static volatile boolean available;
     private static volatile boolean failureLogged;
     private static Method getHandle;
-    private static Method setRequiresPrecisePosition;
+    /** Setter method; null when only the flag field can be written. */
+    private static Method setter;
+    /** Field used for writing and reading back; null when the setter path works. */
+    private static Field flagField;
 
     private PreciseCameraSync() {
     }
@@ -47,10 +53,46 @@ final class PreciseCameraSync {
         }
         try {
             Object handle = getHandle.invoke(camera);
-            setRequiresPrecisePosition.invoke(handle, true);
+            if (setter != null) {
+                setter.invoke(handle, true);
+            } else {
+                flagField.setBoolean(handle, true);
+            }
         } catch (ReflectiveOperationException | RuntimeException exception) {
             available = false;
             logFailure(logger, "enable precise camera sync", exception);
+        }
+    }
+
+    /**
+     * Reads back the entity's precise flag, so a bridge that resolves but does not take
+     * effect can be told apart from a working one. Returns {@code null} when the flag
+     * cannot be read on this server.
+     */
+    static Boolean readFlag(Entity camera) {
+        if (!available) {
+            return Boolean.FALSE;
+        }
+        try {
+            Object handle = getHandle.invoke(camera);
+            if (flagField != null) {
+                return flagField.getBoolean(handle);
+            }
+            for (String name : new String[]{"requiresPrecisePosition", "isRequiresPrecisePosition",
+                    "getRequiresPrecisePosition"}) {
+                try {
+                    Method getter = handle.getClass().getMethod(name);
+                    if (getter.getReturnType() == boolean.class) {
+                        return (Boolean) getter.invoke(handle);
+                    }
+                } catch (ReflectiveOperationException | RuntimeException ignored) {
+                    // Try the next name, then the field.
+                }
+            }
+            Field field = findFlagField(handle.getClass());
+            return field == null ? null : field.getBoolean(handle);
+        } catch (ReflectiveOperationException | RuntimeException exception) {
+            return null;
         }
     }
 
@@ -65,10 +107,18 @@ final class PreciseCameraSync {
             try {
                 Method handleGetter = camera.getClass().getMethod("getHandle");
                 Object handle = handleGetter.invoke(camera);
-                Method precise = handle.getClass().getMethod("setRequiresPrecisePosition", boolean.class);
                 getHandle = handleGetter;
-                setRequiresPrecisePosition = precise;
-                available = true;
+                try {
+                    setter = handle.getClass().getMethod("setRequiresPrecisePosition", boolean.class);
+                    available = true;
+                } catch (NoSuchMethodException renamed) {
+                    // A build may rename the setter while keeping the flag field.
+                    flagField = findFlagField(handle.getClass());
+                    available = flagField != null;
+                    if (!available) {
+                        throw renamed;
+                    }
+                }
             } catch (ReflectiveOperationException | RuntimeException exception) {
                 available = false;
                 logFailure(logger, "resolve the precise camera sync bridge", exception);
@@ -77,6 +127,22 @@ final class PreciseCameraSync {
             }
             return available;
         }
+    }
+
+    /** Finds the flag on the class or one of its superclasses and makes it accessible. */
+    private static Field findFlagField(Class<?> type) {
+        for (Class<?> current = type; current != null; current = current.getSuperclass()) {
+            try {
+                Field field = current.getDeclaredField(FLAG_NAME);
+                field.setAccessible(true);
+                return field;
+            } catch (NoSuchFieldException missing) {
+                // Keep walking up the hierarchy.
+            } catch (RuntimeException ignored) {
+                return null;
+            }
+        }
+        return null;
     }
 
     private static void logFailure(Logger logger, String action, Exception exception) {

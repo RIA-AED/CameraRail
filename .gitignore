@@ -10,3 +10,4 @@ logs/
 server-folia/
 server-paper/
 paper-run*.log
+server-test/

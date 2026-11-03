@@ -6,6 +6,7 @@ import net.ria.zth.camerarail.editor.EditorManager;
 import net.ria.zth.camerarail.editor.EditorUI;
 import net.ria.zth.camerarail.message.Messages;
 import net.ria.zth.camerarail.model.CameraTrack;
+import net.ria.zth.camerarail.model.ExitMode;
 import net.ria.zth.camerarail.runtime.CameraEngine;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
@@ -351,6 +352,22 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
             case "list" -> editors.listSteps(player);
             case "start" -> editors.setStart(player);
             case "exit" -> editors.setExit(player);
+            case "exit-mode" -> {
+                if (args.length < 3) {
+                    messages.get().send(sender, "command.usage", "usage",
+                            "/" + label + " edit exit-mode <animation-end|pre-entry>");
+                    return;
+                }
+                ExitMode mode;
+                try {
+                    mode = ExitMode.parse(args[2]);
+                } catch (IllegalArgumentException exception) {
+                    messages.get().send(sender, "command.usage", "usage",
+                            "/" + label + " edit exit-mode <animation-end|pre-entry>");
+                    return;
+                }
+                editors.setExitMode(player, mode);
+            }
             case "add" -> {
                 Integer duration = optionalInt(sender, args, 2, config.get().defaultMoveDuration());
                 if (duration != null) {

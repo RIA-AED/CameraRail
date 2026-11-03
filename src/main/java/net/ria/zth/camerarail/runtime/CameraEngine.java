@@ -46,6 +46,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
@@ -314,7 +315,11 @@ public final class CameraEngine implements CameraService {
         ArmorStand camera;
         try {
             camera = session.world.spawn(start, ArmorStand.class, CreatureSpawnEvent.SpawnReason.CUSTOM, false, stand -> {
-                stand.setMarker(true);
+                // A marker stand is camera-targeted at its origin on the client while Bukkit
+                // still reports a non-zero eye height; that made the whole shot one eye-height
+                // too low. A normal invisible stand uses eye height on both sides.
+                stand.setMarker(false);
+                stand.setInvisible(true);
                 stand.setSmall(true);
                 stand.setVisible(false);
                 stand.setBasePlate(false);
@@ -353,17 +358,20 @@ public final class CameraEngine implements CameraService {
         // Full-precision rotation; see PreciseCameraSync for why the default byte-quantised
         // entity tracking is visible during slow pans.
         PreciseCameraSync.enable(camera, plugin.getLogger());
+        // Marker armor stands are targeted by the client at the entity position, not at
+        // ArmorStand#getEyeHeight(); a normal invisible stand uses its eye height on both
+        // sides, so spawn it at pose - eye height and keep that offset when moving.
         double eyeOffset = camera.getEyeHeight();
         session.cameraEyeOffset = Double.isFinite(eyeOffset) ? eyeOffset : 0.0;
-        Location feet = start.clone().subtract(0.0, session.cameraEyeOffset, 0.0);
-        feet.setYaw(session.initialPose.yaw());
-        feet.setPitch(session.initialPose.pitch());
+        Location cameraPosition = start.clone().subtract(0.0, session.cameraEyeOffset, 0.0);
+        cameraPosition.setYaw(session.initialPose.yaw());
+        cameraPosition.setPitch(session.initialPose.pitch());
         // teleportAsync is used on Paper as well as Folia: the start chunk (and, later,
         // chunks along the route) is often outside the player's loaded area, and a
         // synchronous Entity#teleport silently fails with "cancelled" when the target
         // chunk is not loaded. teleportAsync loads the target chunk first.
         try {
-            camera.teleportAsync(feet, PlayerTeleportEvent.TeleportCause.PLUGIN)
+            camera.teleportAsync(cameraPosition, PlayerTeleportEvent.TeleportCause.PLUGIN)
                     .whenComplete((success, error) -> camera.getScheduler().execute(plugin, () -> {
                         if (error != null || !Boolean.TRUE.equals(success)) {
                             plugin.getLogger().log(Level.WARNING, "Could not position camera entity",
@@ -570,8 +578,10 @@ public final class CameraEngine implements CameraService {
         if (session.track.entryEffects().isEmpty()) {
             return;
         }
-        // Called on the player's scheduler, before the first teleport, so the screen is
-        // already covered when the camera cuts in.
+        // Called on the player's scheduler, before the first teleport. Only effects the
+        // client reads from the player (nausea/darkness/night_vision) can cover the cut;
+        // blindness is read from the camera entity and does nothing once attached.
+        // See docs/spectator-effects.md.
         for (EffectSpec effect : session.track.entryEffects()) {
             applyEffectNow(session, effect);
         }
@@ -737,6 +747,9 @@ public final class CameraEngine implements CameraService {
         SwayAnimator.SwayOffset offset = session.swayAnimator.tick(target, session.totalTicks);
         Pose pose = session.currentPose.sway(offset.x(), offset.y(), offset.z(), offset.yaw(), offset.pitch());
         ArmorStand camera = session.camera;
+        if (config.get().debug() && camera != null) {
+            tracePose(session, pose, target, camera);
+        }
         if (camera == null || !camera.isValid()) {
             return;
         }
@@ -748,6 +761,75 @@ public final class CameraEngine implements CameraService {
                 pose.x(), pose.y() - session.cameraEyeOffset, pose.z(), pose.yaw(), pose.pitch());
         moveCameraEntity(session, camera, location);
         ensureFollowing(session, location);
+    }
+
+    /**
+     * Debug-only trace of the pose stream itself: once a second, log the largest per-tick
+     * step and how many teleports were deferred. A twitch that shows on screen while this
+     * line stays flat is not coming from the server-side camera pose; the client (entity
+     * interpolation, packet cadence) or the transport is then the place to look.
+     *
+     * <p>When the precise flag is not verifiably on, the tracker may be packing yaw/pitch into
+     * a byte (1/256 turn = 1.40625 degrees). Sub-degree sway then never reaches the client as
+     * motion: it stays still until the accumulated angle crosses a step and jumps. The line
+     * reports those packed steps, which is exactly what the client would see.</p>
+     */
+    private void tracePose(Session session, Pose pose, SwaySettings sway, ArmorStand camera) {
+        Pose previous = session.tracePose;
+        session.tracePose = pose;
+        Boolean preciseFlag = PreciseCameraSync.readFlag(camera);
+        String precise = !PreciseCameraSync.isAvailable() ? "off"
+                : preciseFlag == null ? "on(unverified)"
+                : preciseFlag ? "on" : "on-but-reset";
+        boolean quantised = !"on".equals(precise);
+        float appliedYaw = camera.getLocation().getYaw();
+        if (session.traceEntitySeen) {
+            double entityStep = Math.abs(Pose.shortestYawDelta(session.traceEntityYaw, appliedYaw));
+            session.traceEntityMax = Math.max(session.traceEntityMax, entityStep);
+            if (entityStep == 0.0 && previous != null && pose.yaw() != previous.yaw()) {
+                session.traceStale++;
+            }
+        }
+        session.traceEntitySeen = true;
+        session.traceEntityYaw = appliedYaw;
+        if (previous != null) {
+            session.traceMaxYaw = Math.max(session.traceMaxYaw,
+                    Math.abs(Pose.shortestYawDelta(previous.yaw(), pose.yaw())));
+            session.traceMaxPitch = Math.max(session.traceMaxPitch,
+                    Math.abs(pose.pitch() - previous.pitch()));
+            session.traceMaxPos = Math.max(session.traceMaxPos, pose.distance(previous));
+            if (quantised) {
+                double step = Math.abs(Pose.shortestYawDelta(
+                        (float) packedDegrees(previous.yaw()), (float) packedDegrees(pose.yaw())));
+                if (step > 1.0) {
+                    session.traceWireSteps++;
+                }
+                session.traceWireMax = Math.max(session.traceWireMax, step);
+            }
+        }
+        if (++session.traceTicks < 20) {
+            return;
+        }
+        String wire = quantised
+                ? String.format(Locale.ROOT,
+                " | packed yaw steps>1deg=%d max=%.3f deg", session.traceWireSteps, session.traceWireMax)
+                : "";
+        plugin.getLogger().info(String.format(Locale.ROOT,
+                "camera trace %s tick=%d amp yaw=%.2f deg precise=%s | max/tick yaw=%.3f deg"
+                        + " pitch=%.3f deg pos=%.4f blocks | deferred teleports %d/20"
+                        + " | entity yaw step max=%.3f deg stale=%d/20%s",
+                session.track.id(), session.totalTicks, sway.yaw(), precise,
+                session.traceMaxYaw, session.traceMaxPitch, session.traceMaxPos,
+                session.traceDeferred, session.traceEntityMax, session.traceStale, wire));
+        session.traceTicks = 0;
+        session.traceDeferred = 0;
+        session.traceWireSteps = 0;
+        session.traceWireMax = 0.0;
+        session.traceMaxYaw = 0.0;
+        session.traceMaxPitch = 0.0;
+        session.traceMaxPos = 0.0;
+        session.traceEntityMax = 0.0;
+        session.traceStale = 0;
     }
 
     /**
@@ -764,6 +846,10 @@ public final class CameraEngine implements CameraService {
         long key = ((long) chunkX << 32) ^ (chunkZ & 0xFFFFFFFFL);
         if (!session.cameraChunks.add(key)) {
             return;
+        }
+        if (config.get().debug()) {
+            plugin.getLogger().info("camera chunk " + chunkX + "," + chunkZ + " ticketed at tick "
+                    + session.totalTicks + " for " + session.player.getName());
         }
         try {
             session.world.addPluginChunkTicket(chunkX, chunkZ, plugin);
@@ -799,6 +885,9 @@ public final class CameraEngine implements CameraService {
         ensureCameraChunk(session, location);
         session.pendingCameraTarget = location;
         if (session.cameraTeleportPending) {
+            if (config.get().debug()) {
+                session.traceDeferred++;
+            }
             return;
         }
         issueCameraTeleport(session, camera);
@@ -839,6 +928,11 @@ public final class CameraEngine implements CameraService {
                     + session.player.getName(), exception);
             requestEnd(session, EndReason.CAMERA_LOST, RestoreMode.ORIGINAL, true, true);
         }
+    }
+
+    /** The 1/256 turn byte the vanilla entity tracker packs an angle into. */
+    private static double packedDegrees(float degrees) {
+        return ((byte) (int) Math.floor(degrees * 256.0 / 360.0)) * 360.0 / 256.0;
     }
 
     private SwaySettings resolveSway(Session session) {
@@ -897,6 +991,10 @@ public final class CameraEngine implements CameraService {
         if ((current.getBlockX() >> 4) == chunkX && (current.getBlockZ() >> 4) == chunkZ) {
             session.followPending.set(false);
             return;
+        }
+        if (config.get().debug()) {
+            plugin.getLogger().info("camera follow: player " + player.getName() + " -> chunk "
+                    + chunkX + "," + chunkZ + " at tick " + session.totalTicks);
         }
         beginInternalTeleport(session, 500L);
         try {
@@ -981,15 +1079,16 @@ public final class CameraEngine implements CameraService {
             finalizeSession(session, notify);
             return;
         }
-        // Teleport while the player is still a flying spectator, then restore the game
-        // mode in the success callback. Restoring first would put a survival player at
-        // the camera pose while the exit chunk loads/generates.
+        // Teleport while the player is still a flying spectator, then wait one tick before
+        // restoring the game mode. The extra tick lets the client apply the new body
+        // position/rotation before its camera leaves the armour stand, which removes the
+        // visible snap back to the old body position.
         beginInternalTeleport(session, 1000L);
         try {
             player.teleportAsync(destination, PlayerTeleportEvent.TeleportCause.PLUGIN)
                     .whenComplete((success, error) -> {
                         endInternalTeleport(session);
-                        player.getScheduler().execute(plugin, () -> {
+                        player.getScheduler().runDelayed(plugin, task -> {
                             boolean restored = restorePlayerSafely(session, restoreGameMode);
                             if (!restored) {
                                 session.keepRecovery = true;
@@ -1003,7 +1102,7 @@ public final class CameraEngine implements CameraService {
                                 session.completed = session.endReason == EndReason.FINISHED;
                             }
                             finalizeSession(session, notify);
-                        }, () -> finishWithoutPlayer(session), 0L);
+                        }, () -> finishWithoutPlayer(session), 1L);
                     });
         } catch (RuntimeException exception) {
             endInternalTeleport(session);
@@ -1031,15 +1130,21 @@ public final class CameraEngine implements CameraService {
             return session.original == null ? null : session.original.location();
         }
         CameraTrack track = session.track;
-        if (track.exit() != null) {
-            return track.exit().toLocation(session.world);
-        }
-        // No explicit exit: return to where the player was before the shot. Falling back
-        // to the last camera pose would often drop the player from mid-air or inside a
-        // wall, which is never a safe default.
-        if (session.original != null) {
-            return session.original.location();
-        }
+        return switch (track.exitMode()) {
+            case CUSTOM -> track.exit().toLocation(session.world);
+            case PRE_ENTRY -> session.original == null ? null : session.original.location();
+            case ANIMATION_END -> animationEndLocation(session);
+        };
+    }
+
+    /**
+     * Uses the camera entity's actual final eye position and rotation, including the last
+     * sway/pose tick, so the player body can be placed exactly under the client's camera.
+     */
+    private Location animationEndLocation(Session session) {
+        // Use the unswayed track pose, not the last rendered frame: the editor saved the
+        // base pose, so exiting there keeps the final coordinates exact. Natural sway is
+        // only ~0.06 blocks / 0.6 degrees, so dropping that last-frame offset is invisible.
         Pose pose = session.currentPose;
         double eyeHeight = session.player.getEyeHeight();
         return new Location(session.world, pose.x(), pose.y() - eyeHeight, pose.z(), pose.yaw(), pose.pitch());
@@ -1254,6 +1359,12 @@ public final class CameraEngine implements CameraService {
         }
     }
 
+    /**
+     * Effects always target the player, never the camera armor stand: the client only sends a
+     * non-player entity's effect packets to its passengers, and a spectator target is not a
+     * passenger. Note that this still does not make camera-entity effects (blindness fog, FOV)
+     * visible while attached; see {@code docs/spectator-effects.md}.
+     */
     private void applyEffectNow(Session session, EffectSpec spec) {
         Player player = session.player;
         if (!session.originalEffects.containsKey(spec.type())) {

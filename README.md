@@ -19,13 +19,13 @@
 
 ## 工作原理
 
-1. 在轨道起点生成一个默认对所有玩家隐藏的隐形标记盔甲架，然后只对当前玩家 `showEntity`。
+1. 在轨道起点生成一个默认对所有玩家隐藏的隐形盔甲架（非 marker，客户端按眼高取景），然后只对当前玩家 `showEntity`。
 2. 保存玩家原本的游戏模式、位置、飞行状态和药水效果。
 3. 把玩家传送到镜头起点，切换为旁观者，再 `setSpectatorTarget` 到镜头实体。顺序不能反：客户端会丢弃找不到实体 id 的 `Set Camera` 包，而且不会重试。
 4. 镜头的实体调度器每 tick 计算当前姿态（移动/路径/停留/摇摆），移动并旋转盔甲架。
 5. 玩家实体在镜头跨区块时跟着移动，保证客户端持续收到镜头附近的区块；不会每 tick 传送玩家。
 6. 遇到 `wait` 时保持镜头，等待 API 或命令发送信号。
-7. 结束时把玩家传送到 `exit`；若没有配置 `exit`，则回到过场开始前的位置。随后恢复游戏模式、飞行状态和插件改动过的药水效果。
+7. 结束时按 `exit-mode` 放置玩家：默认 `animation-end` 停在镜头最后的位置（使用未叠加 sway 的基准姿态，最终坐标与编辑值一致）；`pre-entry` 回到过场开始前的位置；`custom` 使用 `exit` 指定的脚部位置。先把玩家身体传送到目标位置，等 1 tick 再解除旁观，避免客户端先回到旧身体位置造成接缝。随后恢复游戏模式、飞行状态和插件改动过的药水效果。
 
 因为镜头运动发生在实体上，客户端会负责帧间插值；玩家自己的 `teleport` 只影响区块加载，不影响镜头画面。这也是直接 tp 玩家无法得到平滑镜头的原因。
 
@@ -70,21 +70,23 @@ tracks:
     display-name: "登录 · 晨雾"
     world: world
     start: { x: 0.5, y: 100.0, z: 0.5, yaw: 0, pitch: 10 }
-    # exit 可省略；省略时回到开始过场前的位置
+    # 结束位置：默认停在镜头最后的位置；也可写 exit-mode: pre-entry 回到进入前的位置
+    exit-mode: animation-end
+    # 自定义退出点：exit-mode: custom + exit（玩家脚部位置）
     # exit: { x: 0.5, y: 65.0, z: 0.5, yaw: 0, pitch: 0 }
     sway: natural
+    # 附身镜头下只有 darkness/nausea/night_vision 等少数效果有画面；
+    # blindness/slowness 不会生效，见 docs/spectator-effects.md。
     entry-effects:
-      - effect: blindness
+      - effect: darkness
     steps:
       - { type: hold, duration: 40, sway: off }
-      - { type: effect, effect: blindness, action: remove }
-      - { type: effect, effect: slowness, amplifier: 2 }
+      - { type: effect, effect: darkness, action: remove }
       - type: move
         to: { x: 8.5, y: 98.0, z: -6.5, yaw: 28, pitch: 6 }
         duration: 100
         easing: ease-in-out
       - { type: wait, signal: authme:authenticated, timeout: 6000 }
-      - { type: effect, effect: slowness, action: remove }
       - type: path
         duration: 120
         easing: ease-in-out
@@ -99,9 +101,13 @@ tracks:
 /zth-camera advance authme:authenticated AuthMePlayer
 ```
 
-镜头会继续走完 `path`。示例没有配置 `exit`，所以结束后会回到玩家开始过场前的位置。
+镜头会继续走完 `path`。示例没有配置自定义退出点，所以结束后会停在镜头最后的位置。
 
-> `start` 是**镜头眼睛**的位置，通常要高于地面；`exit` 是**玩家脚部**的位置。若配置 `exit`，请把它放在安全落点，否则玩家退出镜头后仍会按原版规则坠落/受伤。
+> `start` 是**镜头眼睛**的位置，通常要高于地面；`exit` 是**玩家脚部**的位置，只在 `exit-mode: custom` 时使用。默认 `animation-end` 会把玩家放在镜头最终位置（按眼高换算到脚部）；`pre-entry` 回到进入镜头前的位置。若使用 `custom`，请把 `exit` 放在安全落点，否则玩家退出镜头后仍会按原版规则坠落/受伤。
+
+### 为什么相机实体不是 marker
+
+marker 盔甲架在客户端会用实体原点作为旁观相机位置，而服务端 `ArmorStand#getEyeHeight()` 仍可能返回非零眼高；这会让整个镜头比保存的视角低一个眼高，退出时看起来像从脚部升到头部。普通隐形盔甲架在客户端和服务端都按同一个眼高取景，因此相机实体不使用 marker 标记。
 
 ## 概念
 
@@ -127,22 +133,22 @@ tracks:
 
 ### 摇摆（sway）
 
-`sway` 是持续的微小扰动，不是随机抖动。它由两个正弦频率叠加，按轨道级 `period` 与 `seed` 生成，因此同一条轨道的预览是可复现的。
+`sway` 是持续的微小扰动，不是随机抖动。它由两个正弦频率叠加，按轨道级 `period` 与 `seed` 生成，因此同一条轨道的预览是可复现的。两个频率都按绝对 tick 连续求值，不会在 `period` 边界重新起算，所以摇摆本身不会跳变；`period` 只决定摆动快慢。
 
-预设：`off`、`gentle`、`natural`、`strong`。默认由 `config.yml` 的 `defaults.sway` 决定，步骤可以用 `sway` 覆盖，`inherit` 表示使用轨道默认值。步骤切换时振幅会平滑过渡，不会突然开始/停止。
+预设：`off`、`gentle`、`natural`、`strong`。默认由 `config.yml` 的 `defaults.sway` 决定，步骤可以用 `sway` 覆盖，`inherit` 表示使用轨道默认值。步骤切换时振幅会平滑过渡，不会突然开始/停止。预设档位**不使用左右转头**（`yaw` 恒为 0），只做位置漂移加轻微俯仰，这样视角不会左右抽动；需要左右转头时，在 YAML 里写自定义 `yaw`。
 
 ### 画面效果（effect）
 
-支持任意已注册药水效果，常见缩写：
+附身镜头下，药水效果只有少数会真正改变画面。`effect` 步骤施加给玩家；不要施加给盔甲架（客户端收不到它的效果包）。
 
-- `blindness`（失明）：用于进入镜头前遮住硬切。
-- `darkness`（黑暗）：更明显的暗角/雾效。
-- `slowness`（缓慢）：会收窄客户端 FOV，可作为“长焦”的近似。等级越高越明显。
-- `night_vision`、`nausea`、`speed`、`invisibility` 等。
+- `nausea`：完整生效，视角摇晃。
+- `darkness`：部分生效，世界变暗/脉动；天空和雾不变。
+- `night_vision`：大部分生效，亮度提升；雾色不变。
+- `blindness`、`slowness`/`speed` 等：在当前“盔甲架 + 旁观者附身”模式下没有画面效果。FOV 与失明雾读的是镜头实体；盔甲架不是玩家，且它的效果不会同步给客户端。
+
+真正的黑场渐变/精确 FOV 需要客户端 mod、资源包或换相机方案；详见 [docs/spectator-effects.md](docs/spectator-effects.md)。
 
 效果默认隐藏粒子和 HUD 图标，不污染界面。`duration` 省略或为 `0` 表示持续到步骤显式移除/轨道结束；正整数表示指定 tick。插件退出时会恢复它改动过的原效果，并把原本剩余的时间扣掉已经过去的时长。
-
-> 原版 Minecraft 没有“全屏亮度渐变”或“精确 FOV 曲线”的服务端协议。真正的黑场渐变需要资源包/光影/客户端 mod；本插件用 `blindness`/`darkness` 做近似。`slowness` 的 FOV 变化也是原版行为，不保证在所有客户端设置下一致。
 
 ### 信号（signal）
 
@@ -168,9 +174,13 @@ cameras.advance(player, "authme:authenticated");
 
 - 支持全部 7 种步骤：`move`、`path`、`hold`、`wait`、`cut`、`effect`、`title`。
 - 坐标、时长、缓动、摇摆、信号、效果、标题都能在表单里直接改；坐标不再只能靠 `here` 抓取。
-- 点“取当前视角”会关闭窗口，1 秒后把当前眼睛位置回填到表单；退出点用“取当前脚下位置”。
+- 点“取当前视角”/“取当前脚下位置”会立即捕获点击时的位置，再重开表单；没有等待倒计时，避免等待期间人物或视角漂移。
+- “退出点 >”可以选择：动画结束位置（默认，停在镜头最后的位置）、进入前的位置、自定义位置；只有自定义位置才需要填脚部坐标。
+- 结束时先把玩家身体传送到最终位置，等 1 tick 再解除旁观，避免客户端先回到旧身体位置造成接缝。
 - 按 Esc 关闭窗口后可以正常移动/飞行；再次 `/zc edit` 会回到上次的界面、页码和选中步骤，而不是总回轨道概览。
+- 坐标相关的表单（移动/硬切目标、路径点、起点、退出点）都有“传送到此”：关闭窗口并传送过去，再用 `/zc edit` 回到原表单。起点/步骤/路径点按眼睛坐标换算脚部位置，退出点按保存的脚部位置直接传送。
 - 步骤表单标题带序号（如“步骤 3 · 移动”），并提供“保存并返回”“上一步/下一步”，连续改多步时不用反复回列表。
+- 有输入的表单用“取消”表示不保存并返回；列表和选择器的“返回”只是导航，不会丢输入。
 - 路径步骤有独立的路径点列表：逐个编辑、追加当前视角、插入、删除、上移/下移。
 - 轨道设置可以改显示名称、说明、默认摇摆（预设/周期/种子）和是否跟随区块；入场效果可以添加、编辑、删除。
 - “预览此步”只播放选中的这一步，播完自动停；结束回到原来的步骤表单，方便“改参数 → 预览这一段 → 继续改”。这一步之前的 `effect`/`title` 不会回放；遇到 `wait` 时用 `/zc advance <信号>` 推进。
@@ -191,9 +201,12 @@ cameras.advance(player, "authme:authenticated");
 /zth-camera edit point                      # 给选中路径追加当前视角
 /zth-camera edit hold 40                    # 追加停留
 /zth-camera edit wait authme:authenticated  # 追加等待信号
-/zth-camera edit effect add blindness       # 追加失明效果
+/zth-camera edit effect add darkness       # 追加黑暗效果（附身镜头下部分生效）
 /zth-camera edit title 20 60 20 欢迎|正在同步 # 标题/副标题
 /zth-camera edit select 3
+/zth-camera edit exit-mode animation-end     # 默认：结束在镜头最后的位置
+/zth-camera edit exit-mode pre-entry         # 结束后回到进入镜头前的位置
+/zth-camera edit exit                        # 自定义退出点：当前脚下位置
 /zth-camera edit duration 80
 /zth-camera edit easing ease-in-out
 /zth-camera edit sway natural|off|inherit
@@ -302,7 +315,7 @@ public void onAuthSuccess(AuthMeAuthenticatedEvent event) {
 | 多世界轨道 | 不支持；一条轨道只能属于一个世界 |
 | 跨区块飞行 | 玩家实体随镜头跨区块移动，保证区块加载；可由轨道 `follow: false` 关闭 |
 
-退出点不在安全位置时，玩家仍会按原版规则坠落/受伤；插件不会额外给飞行或无敌。请给 `exit` 配置一个安全落点。
+退出点不在安全位置时，玩家仍会按原版规则坠落/受伤；插件不会额外给飞行或无敌。默认的动画结束位置可能停在半空，需要安全落点时请选择“进入前的位置”或自定义 `exit`。
 
 ## Folia
 
@@ -333,9 +346,9 @@ mvn package
 
 ## 实机验证记录
 
-- Paper 26.1.2-74 + **官方 Minecraft 26.1.2 客户端**：观察者镜头成功附身，按住 W 不会移动镜头，高空镜头视角正常；默认 `/zc play`、远距离起点、标题/失明/缓慢效果、等待信号、结束回原位置、外部传送、死亡、退出重连恢复均通过。截图见 [docs/vanilla-camera-test.png](docs/vanilla-camera-test.png)。
-- Folia 26.1.2-8 + ViaVersion/ViaBackwards：同一套 `login` 轨道播放、等待推进、结束回原位置通过，无 region 线程异常。
-- 单元测试：`mvn test`，40 个测试全部通过。
+- Paper 26.1.2-74 + **官方 Minecraft 26.1.2 客户端**：观察者镜头成功附身，按住 W 不会移动镜头，高空镜头视角正常；默认 `/zc play`、远距离起点、标题、药水效果步骤、等待信号、结束落点、外部传送、死亡、退出重连恢复均通过。药水效果只验证了服务端状态；附身镜头下 `blindness`/`slowness` 没有画面效果，见 [docs/spectator-effects.md](docs/spectator-effects.md)。截图见 [docs/vanilla-camera-test.png](docs/vanilla-camera-test.png)。
+- Folia 26.1.2-8 + ViaVersion/ViaBackwards：同一套 `login` 轨道播放、等待推进、结束落点通过，无 region 线程异常。
+- 单元测试：`mvn test`，47 个测试全部通过。
 - 帮助页面：全部帮助行（两种命令名、两个作用域、全部详情页）在单元测试中按字体像素宽度断言不超过聊天宽度，并校验权限过滤、点击填入与消息键完整性。
 - 图形编辑器（Dialog）已通过编译与单元测试，尚未在 Paper 26.1.2 官方客户端上逐项点击验证；检查清单见 [docs/testing.md](docs/testing.md)。
 
@@ -359,8 +372,9 @@ Horizon nightly 2026-11-01（26.3 协议）链路**不会锁定旁观者相机**
 
 ## 已知限制
 
-- 原版没有真正的全屏渐变、精确 FOV 曲线或景深；效果只能近似。
+- 原版没有真正的全屏渐变、精确 FOV 曲线或景深；而且在“盔甲架 + 旁观者附身”下，`blindness`/`slowness` 等依赖镜头实体的效果没有画面，只有 `nausea`、部分 `darkness` 和大部分 `night_vision` 可用（见 [docs/spectator-effects.md](docs/spectator-effects.md)）。
 - 镜头实体是盔甲架，依赖客户端正常处理旁观者目标；极少数客户端 mod/资源包可能改变表现。
+- `sway` 的**左右旋转**（`yaw`）在部分客户端上会偶发 0.2–1° 的短促回抽；预设档位现已把 `yaw` 固定为 0（只做位置漂移与轻微俯仰）来规避，自定义 `yaw` 时仍可能出现。服务端这一侧已逐项实测排除——摇摆公式（单测钉死每 tick 位移上界）、角度量化（`precise-sync` 回读为 `on`）、传送与区块（静止 hold 无跨区块事件，`stale=0/20`）、姿态流本身（strong 档 `max/tick yaw` 0.074°，盔甲架每 tick 都被更新）；换成非生物实体（Marker）同样出现，所以也不是生物相机的身体/头部朝向路径。剩余原因在客户端对旁观实体相机的插值/渲染，服务端无法控制。
 - 镜头的精确同步依赖 Paper 26.1.2 的映射字段；未来服务端改名时桥接会自动退回默认的量化跟踪（慢速旋转可能重新出现 1.4° 台阶），不会影响播放。
 - 一条轨道不能跨世界。
 - 编辑器会重写 `tracks.yml`，不保留手写注释；若文件里有解析失败的轨道，插件会拒绝保存，直到修好并重载。

@@ -10,8 +10,9 @@ tracks:
     description: "..."
     world: world
     start: { x: 0.5, y: 100.0, z: 0.5, yaw: 0, pitch: 10 }
-    # exit 可省略；省略时回到玩家开始过场前的位置
-    exit:  { x: 0.5, y: 65.0, z: 0.5, yaw: 0, pitch: 0 }
+    # 结束位置默认停在镜头最后的位置；需要安全落点时改成 pre-entry 或 custom
+    exit-mode: animation-end
+    # exit:  { x: 0.5, y: 65.0, z: 0.5, yaw: 0, pitch: 0 }   # 仅 custom
     sway: natural
     follow: true
     entry-effects:
@@ -35,7 +36,8 @@ tracks:
 | `description` | string | 否 | 管理信息中的说明 |
 | `world` | string | 是 | 轨道所在世界名，必须与服务器加载的世界名一致 |
 | `start` | pose | 是 | 起始镜头姿态（眼睛位置） |
-| `exit` | pose | 否 | 结束后玩家脚部位置和朝向；省略时回到过场开始前的位置 |
+| `exit-mode` | string | 否 | `animation-end`（默认，镜头最后位置）、`pre-entry`（进入前位置）或 `custom` |
+| `exit` | pose | 否 | 仅 `exit-mode: custom` 时使用的玩家脚部位置和朝向 |
 | `sway` | preset / map | 否 | 轨道默认摇摆，默认取 `config.yml` |
 | `follow` | boolean | 否 | 玩家实体是否跟随镜头跨区块；默认取配置 |
 | `entry-effects` | list | 否 | 进入镜头（第一次传送前）施加的效果，只能 add |
@@ -53,7 +55,17 @@ tracks:
 | `yaw` | number | 否 | 0 |
 | `pitch` | number | 否 | 0，范围 -90..90 |
 
-`start` 的 `y` 是**镜头眼睛**高度；`exit` 的 `y` 是**玩家脚部**高度。两者不要混用。
+`start` 的 `y` 是**镜头眼睛**高度；`exit` 的 `y` 是**玩家脚部**高度，只在 `exit-mode: custom` 时使用。两者不要混用。
+
+### exit-mode
+
+| 值 | 行为 |
+| --- | --- |
+| `animation-end` | 默认。结束后停在镜头最后的位置，按保存的基准姿态计算（不叠加 sway），再按玩家眼高换算到脚部。 |
+| `pre-entry` | 结束后回到进入镜头前的位置。 |
+| `custom` | 使用 `exit` 指定的玩家脚部位置；必须同时配置 `exit`。 |
+
+为兼容旧文件，写了 `exit` 但没有写 `exit-mode` 时按 `custom` 处理；两者都没有时按 `animation-end`。
 
 ### sway
 
@@ -74,28 +86,29 @@ sway:
   x: 0.03               # 方块/水平
   y: 0.016
   z: 0.022
-  yaw: 0.28             # 角度
+  yaw: 0.28             # 角度；预设为 0，想左右转头才写
   pitch: 0.10
   period: 160           # tick，至少 20
   seed: 123456          # 可复现的随机相位
 ```
 
-所有振幅必须非负；`x/y/z` 建议不超过 5，`yaw/pitch` 建议不超过 30。步骤可以覆盖为 `inherit`（默认）、`off`、`gentle`、`natural`、`strong`。步骤覆盖只改变振幅，周期/种子仍来自轨道，以保证切换时相位连续。
+所有振幅必须非负；`x/y/z` 建议不超过 5，`yaw/pitch` 建议不超过 30。预设档位的 `yaw` 恒为 0（只做位置漂移和轻微俯仰，画面不会左右转），需要左右转头时按上面的写法显式给 `yaw`。步骤可以覆盖为 `inherit`（默认）、`off`、`gentle`、`natural`、`strong`。步骤覆盖只改变振幅，周期/种子仍来自轨道，以保证切换时相位连续。
 
 > YAML 1.1 会把未加引号的 `off`/`on` 解析成布尔值。插件对 `false` 按 `off` 处理，`true` 按 `inherit` 处理；写成加引号的 `'off'` 也可。
 
 ### entry-effects
 
-在保存恢复文件后、第一次硬切到镜头起点之前施加，适合用 `blindness` 遮住进入瞬间：
+在保存恢复文件后、第一次硬切到镜头起点之前施加，适合用 `darkness` 做部分压暗：
 
 ```yaml
 entry-effects:
-  - effect: blindness
-  - effect: slowness
-    amplifier: 2
+  - effect: darkness
+  - effect: night_vision
 ```
 
 只支持添加，不支持 `action`。字段与 `effect` 步骤相同。正常结束或中止时，插件会恢复进入前的原效果。
+
+> 附身盔甲架时，`blindness` 不会产生画面（客户端读镜头实体的效果，盔甲架的效果不会同步给旁观者）；详见 [spectator-effects.md](spectator-effects.md)。
 
 ## 步骤
 
@@ -169,9 +182,11 @@ entry-effects:
   duration: 0          # 省略/0 = 持续到移除或轨道结束；正整数 = tick
 ```
 
-常见效果名：`blindness`、`darkness`、`slowness`/`slow`、`night_vision`、`nausea`、`speed`、`invisibility`、`glowing`、`slow_falling`、`levitation`、`regeneration`、`resistance`、`fire_resistance`、`water_breathing`、`conduit_power`、`dolphins_grace`、`bad_omen`、`hero_of_the_village`。也接受带命名空间的注册 id，如 `minecraft:slowness`。
+常见效果名：`nausea`、`darkness`、`night_vision`、`blindness`、`slowness`/`slow`、`speed`、`invisibility`、`glowing`、`slow_falling`、`levitation`、`regeneration`、`resistance`、`fire_resistance`、`water_breathing`、`conduit_power`、`dolphins_grace`、`bad_omen`、`hero_of_the_village`。也接受带命名空间的注册 id，如 `minecraft:slowness`。
 
-`slowness` 会降低客户端 FOV，可作为“长焦”近似；它不是精确的镜头焦距控制。所有插件施加的效果都隐藏粒子和 HUD 图标。
+> 附身盔甲架时，只有 `nausea` 完整生效、`darkness` 部分生效（世界变暗/脉动，天空和雾不变）、`night_vision` 大部分生效（亮度提升，雾色不变）。`blindness`、`slowness`/`speed` 等没有画面效果；FOV 与失明雾读的是镜头实体，而盔甲架不是玩家，且它的效果不会同步给客户端。详见 [spectator-effects.md](spectator-effects.md)。
+
+所有插件施加的效果都隐藏粒子和 HUD 图标。
 
 ### title
 
@@ -196,25 +211,24 @@ tracks:
     description: "AuthMe 登录过场"
     world: world
     start: { x: 0.5, y: 100.0, z: 0.5, yaw: 0, pitch: 10 }
-    # exit 可省略；省略时回到玩家开始过场前的位置
-    exit:  { x: 0.5, y: 65.0, z: 0.5, yaw: 0, pitch: 0 }
+    # 结束位置默认停在镜头最后的位置；需要安全落点时改成 pre-entry 或 custom
+    exit-mode: animation-end
+    # exit:  { x: 0.5, y: 65.0, z: 0.5, yaw: 0, pitch: 0 }   # 仅 custom
     sway:
       preset: natural
       period: 180
       seed: 42
     follow: true
     entry-effects:
-      - effect: blindness
+      - effect: darkness
     steps:
       - { type: hold, duration: 40, sway: off }
-      - { type: effect, effect: blindness, action: remove }
-      - { type: effect, effect: slowness, amplifier: 2 }
+      - { type: effect, effect: darkness, action: remove }
       - type: move
         to: { x: 8.5, y: 68.0, z: -6.5, yaw: 28, pitch: 6 }
         duration: 100
         easing: ease-in-out
       - { type: wait, signal: authme:authenticated, timeout: 6000, sway: gentle }
-      - { type: effect, effect: slowness, action: remove }
       - type: path
         duration: 120
         easing: ease-in-out

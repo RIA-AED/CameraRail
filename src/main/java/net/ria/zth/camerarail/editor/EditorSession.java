@@ -62,6 +62,7 @@ final class EditorSession {
         PATH_POINTS,
         PATH_POINT_FORM,
         TRACK_SETTINGS,
+        EXIT_MODE,
         POSE_START,
         POSE_EXIT,
         ENTRY_EFFECTS,

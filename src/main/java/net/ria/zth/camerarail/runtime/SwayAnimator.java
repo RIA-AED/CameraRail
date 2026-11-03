@@ -5,9 +5,18 @@ import net.ria.zth.camerarail.model.SwaySettings;
 /**
  * Evaluates a continuous, deterministic two-frequency sway. Amplitudes blend slowly when
  * the active step changes, so switching between "still" and "wind" does not snap.
+ *
+ * <p>Both oscillators are evaluated from the absolute tick, never from a phase that is
+ * wrapped back to zero once per period. Wrapping only the slow oscillator is safe, but the
+ * fast one runs 2.371 cycles per period, so a wrapped phase restarts it mid-cycle: every
+ * {@code period} ticks all five channels jump at once, by an order of magnitude more than a
+ * normal tick. On screen that reads as the camera twitching once per period, and it grows
+ * with the amplitude preset while "off" stays perfectly still.</p>
  */
 public final class SwayAnimator {
     private static final double BLEND = 0.08;
+    private static final double SECOND_FREQUENCY = 2.371;
+    private static final double TWO_PI = Math.PI * 2.0;
 
     private final int period;
     private final double[] phases = new double[5];
@@ -38,6 +47,9 @@ public final class SwayAnimator {
 
     /**
      * Advances the amplitude blend by one tick and evaluates the sway at {@code tick}.
+     *
+     * <p>{@code tick} is an absolute tick count, not an offset inside the period. A session
+     * starts it at zero, so the same track with the same seed still previews identically.</p>
      */
     public SwayOffset tick(SwaySettings target, long tick) {
         if (!initialized) {
@@ -55,13 +67,13 @@ public final class SwayAnimator {
             amplitudePitch += (target.pitch() - amplitudePitch) * BLEND;
         }
 
-        double phase = (tick % (long) period) / (double) period * Math.PI * 2.0;
+        double angle = tick / (double) period * TWO_PI;
         return new SwayOffset(
-                amplitudeX * wave(phase, phases[0]),
-                amplitudeY * wave(phase, phases[1]),
-                amplitudeZ * wave(phase, phases[2]),
-                amplitudeYaw * wave(phase, phases[3]),
-                amplitudePitch * wave(phase, phases[4])
+                amplitudeX * wave(angle, phases[0]),
+                amplitudeY * wave(angle, phases[1]),
+                amplitudeZ * wave(angle, phases[2]),
+                amplitudeYaw * wave(angle, phases[3]),
+                amplitudePitch * wave(angle, phases[4])
         );
     }
 
@@ -85,9 +97,9 @@ public final class SwayAnimator {
         return amplitudePitch;
     }
 
-    private static double wave(double phase, double offset) {
-        double first = Math.sin(phase + offset);
-        double second = Math.sin(phase * 2.371 + offset * 1.7 + 1.113);
+    private static double wave(double angle, double offset) {
+        double first = Math.sin(angle + offset);
+        double second = Math.sin(angle * SECOND_FREQUENCY + offset * 1.7 + 1.113);
         return 0.64 * first + 0.36 * second;
     }
 

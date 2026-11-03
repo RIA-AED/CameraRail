@@ -25,6 +25,7 @@ import net.ria.zth.camerarail.model.Easing;
 import net.ria.zth.camerarail.model.EffectAction;
 import net.ria.zth.camerarail.model.EffectSpec;
 import net.ria.zth.camerarail.model.EffectStep;
+import net.ria.zth.camerarail.model.ExitMode;
 import net.ria.zth.camerarail.model.HoldStep;
 import net.ria.zth.camerarail.model.MoveStep;
 import net.ria.zth.camerarail.model.PathStep;
@@ -37,10 +38,12 @@ import net.ria.zth.camerarail.model.TitleStep;
 import net.ria.zth.camerarail.model.WaitStep;
 import net.ria.zth.camerarail.runtime.TrackTimeline;
 import org.bukkit.Location;
+import org.bukkit.World;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.potion.PotionEffectType;
 
@@ -144,6 +147,7 @@ public final class EditorUI implements Listener {
             case PATH_POINTS -> showPathPoints(player, session.uiPage, notice);
             case PATH_POINT_FORM -> showPathPointForm(player, session.uiPoint, null, notice);
             case TRACK_SETTINGS -> showTrackSettings(player, null, notice);
+            case EXIT_MODE -> showExitMode(player, notice);
             case POSE_START -> showPoseForm(player, PoseTarget.START, null, notice);
             case POSE_EXIT -> showPoseForm(player, PoseTarget.EXIT, null, notice);
             case ENTRY_EFFECTS -> showEntryEffects(player, session.uiPage, notice);
@@ -258,7 +262,7 @@ public final class EditorUI implements Listener {
         buttons.add(formButton("创建", "以当前视角创建并开始编辑", BUTTON_WIDTH,
                 response -> read(response, "track_id", "display"),
                 this::createTrack));
-        buttons.add(button(back("返回"), "回到轨道列表", p -> showTrackList(p, 0, null)));
+        buttons.add(button("取消", "不创建并回到轨道列表", p -> showTrackList(p, 0, null)));
         show(player, dialog(text("新建轨道", NamedTextColor.WHITE), body(notice),
                 inputs, buttons, 1));
     }
@@ -308,10 +312,8 @@ public final class EditorUI implements Listener {
         }
         buttons.add(button(submenu("起点"), "当前: " + poseLabel(track.start()),
                 p -> showPoseForm(p, PoseTarget.START, null, null)));
-        buttons.add(button(submenu("退出点"), track.exit() == null
-                        ? "未设置；结束后回到进入前的位置"
-                        : "当前: " + poseLabel(track.exit()),
-                p -> showPoseForm(p, PoseTarget.EXIT, null, null)));
+        buttons.add(button(submenu("退出点"), exitTooltip(track),
+                p -> showExitMode(p, null)));
         buttons.add(button(submenu("轨道设置"), "摇摆 " + preset + " · 跟随"
                 + (track.follow() ? "开" : "关"),
                 p -> showTrackSettings(p, null, null)));
@@ -389,7 +391,7 @@ public final class EditorUI implements Listener {
         buttons.add(formButton("保存", "保存轨道级设置", BUTTON_WIDTH,
                 response -> readWithBoolean(response, "follow", "display", "description", "sway", "period", "seed"),
                 this::saveTrackSettings));
-        buttons.add(button(back("返回"), "不保存并回到轨道概览", p -> showTrack(p, null)));
+        buttons.add(button("取消", "不保存并回到轨道概览", p -> showTrack(p, null)));
         show(player, dialog(text("轨道设置 · " + track.id(), NamedTextColor.WHITE),
                 body(notice, text("世界 " + track.worldName() + " · 单位 tick · custom 保留当前振幅",
                         NamedTextColor.GRAY)), inputs, buttons, 1));
@@ -438,6 +440,77 @@ public final class EditorUI implements Listener {
         } catch (RuntimeException exception) {
             showTrackSettings(player, raw, notice(message(exception), true));
         }
+    }
+
+    private void showExitMode(Player player, Notice notice) {
+        EditorSession session = editors.session(player);
+        if (session == null) {
+            showTrackList(player, 0, null);
+            return;
+        }
+        CameraTrack track = session.draft;
+        session.uiScreen = EditorSession.UiScreen.EXIT_MODE;
+        ExitMode mode = track.exitMode();
+        List<ActionButton> buttons = new ArrayList<>();
+        buttons.add(button((mode == ExitMode.ANIMATION_END ? "* " : "  ") + "动画结束位置",
+                "默认；结束后停在镜头最后的位置",
+                p -> setExitMode(p, ExitMode.ANIMATION_END)));
+        buttons.add(button((mode == ExitMode.PRE_ENTRY ? "* " : "  ") + "进入前的位置",
+                "结束后回到进入镜头前的位置",
+                p -> setExitMode(p, ExitMode.PRE_ENTRY)));
+        buttons.add(button(submenu((mode == ExitMode.CUSTOM ? "* " : "  ") + "自定义位置"),
+                mode == ExitMode.CUSTOM && track.exit() != null
+                        ? "当前: " + poseLabel(track.exit())
+                        : "指定一个固定的脚部位置",
+                p -> showPoseForm(p, PoseTarget.EXIT, null, null)));
+        buttons.add(button(back("返回"), "回到轨道概览", p -> showTrack(p, null)));
+        String hint = switch (mode) {
+            case ANIMATION_END -> "结束后玩家会停在镜头最后的位置.";
+            case PRE_ENTRY -> "结束后回到进入镜头前的位置.";
+            case CUSTOM -> track.exit() == null
+                    ? "还没有自定义位置；点“自定义位置 >”设置."
+                    : "自定义脚部位置: " + poseLabel(track.exit());
+        };
+        show(player, dialog(text("轨道退出点", NamedTextColor.WHITE),
+                body(notice, text("当前: " + exitModeLabel(mode), NamedTextColor.GRAY),
+                        text(hint, NamedTextColor.GRAY)),
+                List.of(), buttons, 1));
+    }
+
+    private void setExitMode(Player player, ExitMode mode) {
+        EditorSession session = editors.session(player);
+        if (session == null) {
+            showTrackList(player, 0, null);
+            return;
+        }
+        String error;
+        try {
+            error = editors.applyDraft(player, session.draft.withExitMode(mode), session.selected);
+        } catch (RuntimeException exception) {
+            showExitMode(player, notice(message(exception), true));
+            return;
+        }
+        if (error != null) {
+            showExitMode(player, notice(error, true));
+            return;
+        }
+        showExitMode(player, notice("退出点已改为" + exitModeLabel(mode) + ".", false));
+    }
+
+    private static String exitModeLabel(ExitMode mode) {
+        return switch (mode) {
+            case ANIMATION_END -> "动画结束位置（默认）";
+            case PRE_ENTRY -> "进入前的位置";
+            case CUSTOM -> "自定义位置";
+        };
+    }
+
+    private static String exitTooltip(CameraTrack track) {
+        return switch (track.exitMode()) {
+            case ANIMATION_END -> "动画结束位置（默认）";
+            case PRE_ENTRY -> "进入前的位置";
+            case CUSTOM -> "自定义: " + poseLabel(track.exit());
+        };
     }
 
     // ------------------------------------------------------------------ steps
@@ -576,7 +649,7 @@ public final class EditorUI implements Listener {
                 case CUT -> new CutStep(eyePose(player), SwayPreset.INHERIT);
                 case HOLD -> new HoldStep(config.get().defaultMoveDuration(), SwayPreset.INHERIT);
                 case WAIT -> new WaitStep("signal", config.get().defaultWaitTimeoutTicks(), SwayPreset.INHERIT);
-                case EFFECT -> effectStep("blindness", EffectAction.ADD, 0, 0);
+                case EFFECT -> effectStep("darkness", EffectAction.ADD, 0, 0);
                 case TITLE -> new TitleStep("", "", 20, 60, 20);
                 case PATH -> null;
             };
@@ -648,11 +721,13 @@ public final class EditorUI implements Listener {
                 (p, raw) -> saveMove(cut, p, index, adding, step, raw, false)));
         buttons.add(formButton("保存并返回", "保存后回到步骤列表", BUTTON_WIDTH, reader,
                 (p, raw) -> saveMove(cut, p, index, adding, step, raw, true)));
-        buttons.add(button("取当前视角", "关闭窗口，1 秒后把当前视角填入", p -> capturePose(p, false, captured -> {
+        buttons.add(button("取当前视角", "关闭窗口并立即把当前视角填入", p -> capturePose(p, false, captured -> {
             Map<String, String> next = copy(values);
             putPose(next, captured);
             showMoveForm(cut, p, index, adding, step, next, notice("已取当前视角.", false));
         })));
+        buttons.add(button("传送到此", "关闭窗口并传送到已保存的目标位置；/zc edit 回来",
+                p -> teleportToPose(p, pose, false)));
         addEditActions(player, buttons, index, adding);
 
         show(player, dialog(text(stepTitle(adding, index, cut ? "硬切" : "移动"), NamedTextColor.WHITE),
@@ -773,7 +848,7 @@ public final class EditorUI implements Listener {
             buttons.add(button("下一页", "下一页信号",
                     p -> showSignalPicker(p, index, adding, step, values, current + 1, null)));
         }
-        buttons.add(button(back("返回"), "回到等待步骤表单",
+        buttons.add(button(back("返回"), "回到等待步骤表单，保留当前输入",
                 p -> showWaitForm(p, index, adding, step, values, null)));
         String summary = signals.isEmpty()
                 ? "还没有 wait 信号；可以直接在表单里输入."
@@ -808,8 +883,9 @@ public final class EditorUI implements Listener {
             buttons.add(button("下一页", "下一页效果",
                     p -> showEffectPicker(p, current + 1, values, onSelect, onBack)));
         }
-        buttons.add(button(back("返回"), "回到效果表单", p -> onBack.accept(p, values)));
-        String summary = "常用药水效果 · " + COMMON_EFFECTS.size() + " 个"
+        buttons.add(button(back("返回"), "回到效果表单，保留当前输入", p -> onBack.accept(p, values)));
+        String summary = "常用药水效果 · 附身镜头下仅 nausea/darkness/night_vision 有画面 · "
+                + COMMON_EFFECTS.size() + " 个"
                 + (COMMON_EFFECTS.size() > PAGE_SIZE
                 ? " · 第 " + (current + 1) + "/" + pageCount(COMMON_EFFECTS.size()) + " 页" : "");
         show(player, dialog(text("常用效果", NamedTextColor.WHITE),
@@ -1027,7 +1103,7 @@ public final class EditorUI implements Listener {
         EditorSession session = editors.session(player);
         int stepCount = session == null ? 0 : session.draft.steps().size();
         if (adding) {
-            buttons.add(button(back("返回"), "不保存并回到步骤列表", p -> {
+            buttons.add(button("取消", "不添加并回到步骤列表", p -> {
                 EditorSession current = editors.session(p);
                 showSteps(p, current == null || current.selected < 0 ? 0 : pageOf(current.selected), null);
             }));
@@ -1035,18 +1111,18 @@ public final class EditorUI implements Listener {
         }
         buttons.add(button("预览此步", "只播放选中的这一步；之前的效果不会回放", p -> preview(p, index, true)));
         if (index > 0) {
-            buttons.add(button("<- 上一步", "按已保存内容切到上一步；未保存输入会丢失",
+            buttons.add(button("<- 上一步", "不保存当前输入，按已保存内容切到上一步",
                     p -> showEditStepForm(p, index - 1, null, null)));
         }
         if (index + 1 < stepCount) {
-            buttons.add(button("下一步 ->", "按已保存内容切到下一步；未保存输入会丢失",
+            buttons.add(button("下一步 ->", "不保存当前输入，按已保存内容切到下一步",
                     p -> showEditStepForm(p, index + 1, null, null)));
         }
         buttons.add(button("上移", "按已保存内容把这一步向前移动", p -> moveStep(p, index, -1)));
         buttons.add(button("下移", "按已保存内容把这一步向后移动", p -> moveStep(p, index, 1)));
         buttons.add(button("复制", "按已保存内容复制这一步并插入到后面", p -> duplicateStep(p, index)));
         buttons.add(button("删除", "按已保存内容删除这一步（可撤销）", p -> deleteStep(p, index)));
-        buttons.add(button(back("返回"), "回到步骤列表", p -> showSteps(p, pageOf(index), null)));
+        buttons.add(button("取消", "不保存并回到步骤列表", p -> showSteps(p, pageOf(index), null)));
     }
 
     private void moveStep(Player player, int index, int delta) {
@@ -1149,7 +1225,7 @@ public final class EditorUI implements Listener {
         if (current < pageCount(path.points().size()) - 1) {
             buttons.add(button("下一页", "下一页路径点", p -> showPathPoints(p, current + 1, null)));
         }
-        buttons.add(button("追加当前视角", "关闭窗口，1 秒后把当前视角追加为路径点", p ->
+        buttons.add(button("追加当前视角", "关闭窗口并立即把当前视角追加为路径点", p ->
                 capturePose(p, false, pose -> appendPathPoint(p, pose))));
         buttons.add(button(back("返回"), "回到路径步骤表单", p -> showEditStepForm(p, session.selected, null, null)));
 
@@ -1203,17 +1279,19 @@ public final class EditorUI implements Listener {
         buttons.add(formButton("保存", "保存这个路径点", BUTTON_WIDTH,
                 response -> read(response, "x", "y", "z", "yaw", "pitch"),
                 (p, raw) -> savePathPoint(p, pointIndex, pose, raw)));
-        buttons.add(button("取当前视角", "关闭窗口，1 秒后把当前视角填入", p -> capturePose(p, false, captured -> {
+        buttons.add(button("取当前视角", "关闭窗口并立即把当前视角填入", p -> capturePose(p, false, captured -> {
             Map<String, String> next = copy(values);
             putPose(next, captured);
             showPathPointForm(p, pointIndex, next, notice("已取当前视角.", false));
         })));
-        buttons.add(button("插入当前视角", "关闭窗口，1 秒后在这个点之后插入一个点", p ->
+        buttons.add(button("传送到此", "关闭窗口并传送到这个路径点；/zc edit 回来",
+                p -> teleportToPose(p, pose, false)));
+        buttons.add(button("插入当前视角", "关闭窗口并立即在这个点之后插入一个点", p ->
                 capturePose(p, false, captured -> insertPathPoint(p, pointIndex, captured))));
         buttons.add(button("上移", "与前一个路径点交换", p -> movePathPoint(p, pointIndex, -1)));
         buttons.add(button("下移", "与后一个路径点交换", p -> movePathPoint(p, pointIndex, 1)));
         buttons.add(button("删除", "删除这个路径点（至少保留一个）", p -> deletePathPoint(p, pointIndex)));
-        buttons.add(button(back("返回"), "回到路径点列表", p -> showPathPoints(p, pageOf(pointIndex), null)));
+        buttons.add(button("取消", "不保存并回到路径点列表", p -> showPathPoints(p, pageOf(pointIndex), null)));
         show(player, dialog(text("路径点 " + (pointIndex + 1), NamedTextColor.WHITE), body(notice),
                 inputs, buttons, 2));
     }
@@ -1340,6 +1418,13 @@ public final class EditorUI implements Listener {
             if (player.getWorld().getName().equals(track.worldName())) {
                 Location feet = player.getLocation();
                 current = new Pose(feet.getX(), feet.getY(), feet.getZ(), feet.getYaw(), feet.getPitch());
+            } else if (target == PoseTarget.EXIT) {
+                // Exit poses are feet positions; convert the start eye pose instead of using
+                // it directly, which would put the player's feet at camera-eye height.
+                Pose start = track.start();
+                double eyeHeight = player.getEyeHeight();
+                current = new Pose(start.x(), start.y() - eyeHeight, start.z(),
+                        start.yaw(), start.pitch());
             } else {
                 current = track.start();
             }
@@ -1352,22 +1437,34 @@ public final class EditorUI implements Listener {
                 (p, raw) -> savePose(p, target, raw)));
         buttons.add(button(target == PoseTarget.EXIT ? "取当前脚下位置" : "取当前视角",
                 target == PoseTarget.EXIT
-                        ? "关闭窗口，1 秒后捕获当前脚下位置"
-                        : "关闭窗口，1 秒后捕获当前视角", p -> capturePose(p, target == PoseTarget.EXIT, captured -> {
+                        ? "关闭窗口并立即取当前脚下位置"
+                        : "关闭窗口并立即取当前视角", p -> capturePose(p, target == PoseTarget.EXIT, captured -> {
             Map<String, String> next = copy(values);
             putPose(next, captured);
             showPoseForm(p, target, next, notice("已取当前位置.", false));
         })));
-        if (target == PoseTarget.EXIT && track.exit() != null) {
-            buttons.add(button("清除退出点", "结束后回到进入镜头前的位置", p -> clearExit(p)));
+        if (target == PoseTarget.START) {
+            buttons.add(button("传送到此", "关闭窗口并传送到已保存的起点位置；/zc edit 回来",
+                    p -> teleportToPose(p, track.start(), false)));
+        } else if (track.exit() != null) {
+            buttons.add(button("传送到此", "关闭窗口并传送到已保存的退出位置；/zc edit 回来",
+                    p -> teleportToPose(p, track.exit(), true)));
         }
-        buttons.add(button(back("返回"), "回到轨道概览", p -> showTrack(p, null)));
+        buttons.add(button("取消", target == PoseTarget.EXIT
+                        ? "不保存并回到退出点设置"
+                        : "不保存并回到轨道概览",
+                p -> {
+                    if (target == PoseTarget.EXIT) {
+                        showExitMode(p, null);
+                    } else {
+                        showTrack(p, null);
+                    }
+                }));
         String hintText = target == PoseTarget.START
                 ? "起点是镜头眼睛位置，通常高于地面."
-                : track.exit() == null
-                        ? "退出点是玩家脚部位置；当前未设置，结束后回到进入前位置."
-                        : "退出点是玩家脚部位置；请保证安全落点.";
-        show(player, dialog(text(target == PoseTarget.START ? "轨道起点" : "轨道退出点", NamedTextColor.WHITE),
+                : "退出点是玩家脚部位置；保存后使用自定义位置.";
+        show(player, dialog(text(target == PoseTarget.START ? "轨道起点" : "轨道退出点 · 自定义",
+                        NamedTextColor.WHITE),
                 body(notice, text(hintText, NamedTextColor.GRAY)), inputs, buttons, 1));
     }
 
@@ -1387,23 +1484,14 @@ public final class EditorUI implements Listener {
                 showPoseForm(player, target, raw, notice(error, true));
                 return;
             }
-            showTrack(player, notice(target == PoseTarget.START ? "起点已更新." : "退出点已更新.", false));
+            if (target == PoseTarget.START) {
+                showTrack(player, notice("起点已更新.", false));
+            } else {
+                showExitMode(player, notice("自定义退出点已保存.", false));
+            }
         } catch (RuntimeException exception) {
             showPoseForm(player, target, raw, notice(message(exception), true));
         }
-    }
-
-    private void clearExit(Player player) {
-        EditorSession session = editors.session(player);
-        if (session == null) {
-            return;
-        }
-        String error = editors.applyDraft(player, session.draft.withExit(null), session.selected);
-        if (error != null) {
-            showTrack(player, notice(error, true));
-            return;
-        }
-        showTrack(player, notice("已清除退出点；结束后回到进入镜头前的位置.", false));
     }
 
     // ------------------------------------------------------------------ entry effects
@@ -1463,7 +1551,7 @@ public final class EditorUI implements Listener {
         EffectSpec existing = index >= 0 && index < effects.size() ? effects.get(index) : null;
         List<DialogInput> inputs = List.of(
                 textInput("effect", "效果 id", value(values, "effect",
-                        existing == null ? "blindness" : shortEffectKey(existing.key())), 80),
+                        existing == null ? "darkness" : shortEffectKey(existing.key())), 80),
                 textInput("amplifier", "等级 (0 = I 级)", value(values, "amplifier",
                         existing == null ? "0" : String.valueOf(existing.amplifier())), 8),
                 textInput("duration", "时长 (tick，0 = 持续)", value(values, "duration",
@@ -1482,7 +1570,7 @@ public final class EditorUI implements Listener {
         if (existing != null) {
             buttons.add(button("删除", "删除这个入场效果", p -> deleteEntryEffect(p, index)));
         }
-        buttons.add(button(back("返回"), "回到入场效果列表", p -> showEntryEffects(p, 0, null)));
+        buttons.add(button("取消", "不保存并回到入场效果列表", p -> showEntryEffects(p, 0, null)));
         show(player, dialog(text(existing == null ? "添加入场效果" : "入场效果 " + (index + 1), NamedTextColor.WHITE),
                 body(notice, text("只支持添加；时长 0 = 持续.", NamedTextColor.GRAY)),
                 inputs, buttons, 1));
@@ -1598,6 +1686,41 @@ public final class EditorUI implements Listener {
 
     // ------------------------------------------------------------------ capture
 
+    private void teleportToPose(Player player, Pose pose, boolean feet) {
+        EditorSession session = editors.session(player);
+        if (session == null || pose == null) {
+            return;
+        }
+        if (session.previewing) {
+            player.sendActionBar(Component.text("预览中无法传送.", NamedTextColor.RED));
+            return;
+        }
+        World world = plugin.getServer().getWorld(session.worldName);
+        if (world == null) {
+            player.sendActionBar(Component.text("轨道世界未加载.", NamedTextColor.RED));
+            return;
+        }
+        Location target;
+        if (feet) {
+            target = pose.toLocation(world);
+        } else {
+            // Camera poses are eye positions; the player must stand at pose.y - eyeHeight.
+            double eyeHeight = player.getEyeHeight();
+            target = new Location(world, pose.x(), pose.y() - eyeHeight, pose.z(), pose.yaw(), pose.pitch());
+        }
+        player.closeDialog();
+        player.teleportAsync(target, PlayerTeleportEvent.TeleportCause.PLUGIN).whenComplete((success, error) -> {
+            player.getScheduler().execute(plugin, () -> {
+                if (error != null || !Boolean.TRUE.equals(success)) {
+                    player.sendActionBar(Component.text("传送失败.", NamedTextColor.RED));
+                } else {
+                    player.sendActionBar(Component.text("已传送到此；/zc edit 回到编辑器.", NamedTextColor.GRAY));
+                }
+            }, () -> {
+            }, 0L);
+        });
+    }
+
     private void capturePose(Player player, boolean feet, Consumer<Pose> then) {
         EditorSession session = editors.session(player);
         if (session == null) {
@@ -1612,8 +1735,15 @@ public final class EditorUI implements Listener {
             showTrack(player, notice("请先前往轨道所在世界 " + session.worldName + ".", true));
             return;
         }
+        Pose captured;
+        try {
+            captured = feet ? feetPose(player) : eyePose(player);
+        } catch (RuntimeException exception) {
+            showTrack(player, notice(message(exception), true));
+            return;
+        }
         player.closeDialog();
-        player.sendActionBar(Component.text(feet ? "1 秒后捕获当前脚下位置…" : "1 秒后捕获当前视角…",
+        player.sendActionBar(Component.text(feet ? "已取当前脚下位置." : "已取当前视角.",
                 NamedTextColor.GRAY));
         player.getScheduler().runDelayed(plugin, task -> {
             if (!player.isOnline()) {
@@ -1624,12 +1754,12 @@ public final class EditorUI implements Listener {
                 return;
             }
             try {
-                then.accept(feet ? feetPose(player) : eyePose(player));
+                then.accept(captured);
             } catch (RuntimeException exception) {
                 showTrack(player, notice(message(exception), true));
             }
         }, () -> {
-        }, 20L);
+        }, 1L);
     }
 
     private Pose eyePose(Player player) {
@@ -1894,9 +2024,9 @@ public final class EditorUI implements Listener {
         return switch (id) {
             case "inherit" -> "继承 (inherit)：使用轨道默认摇摆.";
             case "off" -> "关闭 (off)：完全不摇摆.";
-            case "gentle" -> "轻微 (gentle)：很轻的呼吸感.";
-            case "natural" -> "自然 (natural)：默认的轻微晃动.";
-            case "strong" -> "强烈 (strong)：明显晃动，适合强氛围镜头.";
+            case "gentle" -> "轻微 (gentle)：很轻的漂移和点头，不左右转头.";
+            case "natural" -> "自然 (natural)：默认幅度，位置漂移 + 轻微俯仰.";
+            case "strong" -> "强烈 (strong)：明显的漂移和点头，适合强氛围镜头.";
             case "custom" -> "自定义 (custom)：保留当前自定义振幅.";
             default -> "";
         };

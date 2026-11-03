@@ -13,6 +13,7 @@ public record CameraTrack(
         String description,
         String worldName,
         Pose start,
+        ExitMode exitMode,
         Pose exit,
         SwaySettings sway,
         boolean follow,
@@ -31,6 +32,16 @@ public record CameraTrack(
         }
         if (start == null) {
             throw new IllegalArgumentException("Track start pose is required");
+        }
+        if (exitMode == null) {
+            exitMode = exit == null ? ExitMode.ANIMATION_END : ExitMode.CUSTOM;
+        }
+        if (exitMode == ExitMode.CUSTOM) {
+            if (exit == null) {
+                throw new IllegalArgumentException("Custom exit mode requires an exit pose");
+            }
+        } else {
+            exit = null;
         }
         if (sway == null) {
             throw new IllegalArgumentException("Track sway settings are required");
@@ -69,35 +80,53 @@ public record CameraTrack(
     }
 
     public CameraTrack withSteps(List<Step> newSteps) {
-        return new CameraTrack(id, displayName, description, worldName, start, exit, sway, follow, entryEffects, newSteps);
+        return new CameraTrack(id, displayName, description, worldName, start, exitMode, exit,
+                sway, follow, entryEffects, newSteps);
     }
 
     public CameraTrack withStart(Pose newStart) {
-        return new CameraTrack(id, displayName, description, worldName, newStart, exit, sway, follow, entryEffects, steps);
+        return new CameraTrack(id, displayName, description, worldName, newStart, exitMode, exit,
+                sway, follow, entryEffects, steps);
     }
 
     public CameraTrack withExit(Pose newExit) {
-        return new CameraTrack(id, displayName, description, worldName, start, newExit, sway, follow, entryEffects, steps);
+        ExitMode mode = newExit == null ? ExitMode.ANIMATION_END : ExitMode.CUSTOM;
+        return new CameraTrack(id, displayName, description, worldName, start, mode, newExit,
+                sway, follow, entryEffects, steps);
+    }
+
+    public CameraTrack withExitMode(ExitMode newMode) {
+        ExitMode mode = newMode == null ? ExitMode.ANIMATION_END : newMode;
+        if (mode == ExitMode.CUSTOM && exit == null) {
+            throw new IllegalArgumentException("Custom exit mode requires an exit pose");
+        }
+        Pose nextExit = mode == ExitMode.CUSTOM ? exit : null;
+        return new CameraTrack(id, displayName, description, worldName, start, mode, nextExit,
+                sway, follow, entryEffects, steps);
     }
 
     public CameraTrack withDisplayName(String newDisplayName) {
-        return new CameraTrack(id, newDisplayName, description, worldName, start, exit, sway, follow, entryEffects, steps);
+        return new CameraTrack(id, newDisplayName, description, worldName, start, exitMode, exit,
+                sway, follow, entryEffects, steps);
     }
 
     public CameraTrack withDescription(String newDescription) {
-        return new CameraTrack(id, displayName, newDescription, worldName, start, exit, sway, follow, entryEffects, steps);
+        return new CameraTrack(id, displayName, newDescription, worldName, start, exitMode, exit,
+                sway, follow, entryEffects, steps);
     }
 
     public CameraTrack withSway(SwaySettings newSway) {
-        return new CameraTrack(id, displayName, description, worldName, start, exit, newSway, follow, entryEffects, steps);
+        return new CameraTrack(id, displayName, description, worldName, start, exitMode, exit,
+                newSway, follow, entryEffects, steps);
     }
 
     public CameraTrack withFollow(boolean newFollow) {
-        return new CameraTrack(id, displayName, description, worldName, start, exit, sway, newFollow, entryEffects, steps);
+        return new CameraTrack(id, displayName, description, worldName, start, exitMode, exit,
+                sway, newFollow, entryEffects, steps);
     }
 
     public CameraTrack withEntryEffects(List<EffectSpec> newEntryEffects) {
-        return new CameraTrack(id, displayName, description, worldName, start, exit, sway, follow,
-                newEntryEffects, steps);
+        return new CameraTrack(id, displayName, description, worldName, start, exitMode, exit,
+                sway, follow, newEntryEffects, steps);
     }
 }

@@ -4,6 +4,7 @@ import net.ria.zth.camerarail.config.RailConfig;
 import net.ria.zth.camerarail.config.TrackParser;
 import net.ria.zth.camerarail.model.CameraTrack;
 import net.ria.zth.camerarail.model.Easing;
+import net.ria.zth.camerarail.model.ExitMode;
 import net.ria.zth.camerarail.model.MoveStep;
 import net.ria.zth.camerarail.model.PathStep;
 import net.ria.zth.camerarail.model.SwayPreset;
@@ -17,6 +18,8 @@ import java.io.StringReader;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -123,6 +126,66 @@ class TrackParserTest {
                 steps: []
                 """));
         assertTrue(exception.getMessage().contains("pitch"));
+    }
+
+    @Test
+    void defaultsToAnimationEndExit() {
+        CameraTrack track = parse("""
+                world: world
+                start: { x: 0, y: 64, z: 0 }
+                steps: []
+                """);
+        assertEquals(ExitMode.ANIMATION_END, track.exitMode());
+        assertNull(track.exit());
+    }
+
+    @Test
+    void parsesPreEntryAndCustomExitModes() {
+        CameraTrack preEntry = parse("""
+                world: world
+                start: { x: 0, y: 64, z: 0 }
+                exit-mode: pre-entry
+                steps: []
+                """);
+        assertEquals(ExitMode.PRE_ENTRY, preEntry.exitMode());
+        assertNull(preEntry.exit());
+
+        CameraTrack custom = parse("""
+                world: world
+                start: { x: 0, y: 64, z: 0 }
+                exit-mode: custom
+                exit: { x: 1, y: 65, z: 2, yaw: 90, pitch: 0 }
+                steps: []
+                """);
+        assertEquals(ExitMode.CUSTOM, custom.exitMode());
+        assertNotNull(custom.exit());
+        assertEquals(1.0, custom.exit().x(), 0.0001);
+    }
+
+    @Test
+    void treatsLegacyExitAsCustomAndRejectsConflictingModes() {
+        CameraTrack legacy = parse("""
+                world: world
+                start: { x: 0, y: 64, z: 0 }
+                exit: { x: 1, y: 65, z: 2 }
+                steps: []
+                """);
+        assertEquals(ExitMode.CUSTOM, legacy.exitMode());
+        assertNotNull(legacy.exit());
+
+        assertThrows(IllegalArgumentException.class, () -> parse("""
+                world: world
+                start: { x: 0, y: 64, z: 0 }
+                exit-mode: custom
+                steps: []
+                """));
+        assertThrows(IllegalArgumentException.class, () -> parse("""
+                world: world
+                start: { x: 0, y: 64, z: 0 }
+                exit-mode: pre-entry
+                exit: { x: 1, y: 65, z: 2 }
+                steps: []
+                """));
     }
 
     private static CameraTrack parse(String yamlText) {

@@ -5,6 +5,7 @@ import net.ria.zth.camerarail.config.TrackParser;
 import net.ria.zth.camerarail.config.TrackWriter;
 import net.ria.zth.camerarail.model.CameraTrack;
 import net.ria.zth.camerarail.model.Easing;
+import net.ria.zth.camerarail.model.ExitMode;
 import net.ria.zth.camerarail.model.HoldStep;
 import net.ria.zth.camerarail.model.MoveStep;
 import net.ria.zth.camerarail.model.PathStep;
@@ -32,7 +33,8 @@ class TrackWriterTest {
     @Test
     void roundTripsAHandBuiltTrack(@TempDir Path tempDir) throws Exception {
         Pose start = new Pose(0.5, 64.0, 0.5, 10, 2);
-        CameraTrack track = new CameraTrack("demo", "Demo", "description", "world", start, null,
+        CameraTrack track = new CameraTrack("demo", "Demo", "description", "world", start,
+                ExitMode.ANIMATION_END, null,
                 SwaySettings.ofPreset(SwayPreset.GENTLE, 160, TrackParser.defaultSeed("demo")), false,
                 List.of(),
                 List.of(
@@ -58,6 +60,27 @@ class TrackWriterTest {
         assertEquals(track.steps().size(), reparsed.steps().size());
         assertEquals(track.timedDurationTicks(), reparsed.timedDurationTicks());
         assertEquals(track.sway().x(), reparsed.sway().x());
+        assertEquals(ExitMode.ANIMATION_END, reparsed.exitMode());
         assertEquals(track.steps().get(3).type(), reparsed.steps().get(3).type());
+    }
+
+    @Test
+    void writesAndReparsesACustomExitPose(@TempDir Path tempDir) throws Exception {
+        Pose start = new Pose(0, 64, 0, 0, 0);
+        Pose exit = new Pose(1, 65, 2, 90, 0);
+        CameraTrack track = new CameraTrack("custom", "Custom", "", "world", start,
+                ExitMode.CUSTOM, exit,
+                SwaySettings.ofPreset(SwayPreset.NATURAL, 160, TrackParser.defaultSeed("custom")), false,
+                List.of(), List.of());
+        Path file = tempDir.resolve("tracks.yml");
+        TrackWriter.write(file, Map.of(track.id(), track), CONFIG);
+
+        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file.toFile());
+        CameraTrack reparsed = new TrackParser(CONFIG).parseTrack("custom",
+                yaml.getConfigurationSection("tracks.custom"));
+        assertEquals(ExitMode.CUSTOM, reparsed.exitMode());
+        assertNotNull(reparsed.exit());
+        assertEquals(exit.x(), reparsed.exit().x(), 0.0001);
+        assertEquals(exit.yaw(), reparsed.exit().yaw(), 0.0001);
     }
 }

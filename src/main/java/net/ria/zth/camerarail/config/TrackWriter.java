@@ -5,6 +5,7 @@ import net.ria.zth.camerarail.model.CutStep;
 import net.ria.zth.camerarail.model.EffectAction;
 import net.ria.zth.camerarail.model.EffectSpec;
 import net.ria.zth.camerarail.model.EffectStep;
+import net.ria.zth.camerarail.model.ExitMode;
 import net.ria.zth.camerarail.model.HoldStep;
 import net.ria.zth.camerarail.model.MoveStep;
 import net.ria.zth.camerarail.model.PathStep;
@@ -75,7 +76,8 @@ public final class TrackWriter {
         }
         section.set("world", track.worldName());
         section.set("start", poseMap(track.start()));
-        if (track.exit() != null) {
+        section.set("exit-mode", track.exitMode().configName());
+        if (track.exitMode() == ExitMode.CUSTOM) {
             section.set("exit", poseMap(track.exit()));
         }
         SwaySettings sway = track.sway();

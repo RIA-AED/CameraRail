@@ -10,7 +10,8 @@ schema-version: 1
 
 tracks:
   # 示例：登录过场。玩家在暗处等待外部信号，登录完成后镜头穿过三个路径点。
-  # 没有写 exit 时，镜头结束后回到玩家开始过场前的位置，避免把人丢进方块或空中。
+  # 结束位置默认是动画最后的位置；需要安全落点时写 exit-mode: pre-entry，
+  # 或用 exit-mode: custom + exit（玩家脚部位置）指定固定落点。
   # 这里的坐标只是示例；请用 /zth-camera edit create 在你自己的场景里重新录制。
   login:
     display-name: "登录 · 晨雾"
@@ -26,23 +27,20 @@ tracks:
     sway: natural
     # 玩家实体是否跟随镜头区块加载
     follow: true
-    # 进入镜头前施加的效果，用来遮住第一次硬切；之后在步骤中移除
+    # 进入镜头前施加的效果，用来压暗第一次硬切；之后在步骤中移除。
+    # 附身盔甲架时只有 darkness/nausea/night_vision 等少数效果有画面；
+    # blindness/slowness 不会生效，见 docs/spectator-effects.md。
     entry-effects:
-      - effect: blindness
+      - effect: darkness
     steps:
       # 先保持黑暗，让登录提示有机会显示
       - type: hold
         duration: 40
         sway: off
-      # 失明效果被移除的瞬间，画面会亮起
+      # 黑暗效果被移除的瞬间，画面会亮起
       - type: effect
-        effect: blindness
+        effect: darkness
         action: remove
-      # 用缓慢效果轻微收窄 FOV，模拟长焦。等级越高，画面越“长焦”
-      - type: effect
-        effect: slowness
-        amplifier: 2
-        duration: 0
       # 缓慢推近风景
       - type: move
         to:
@@ -65,10 +63,6 @@ tracks:
         signal: authme:authenticated
         timeout: 6000
         sway: gentle
-      # 恢复 FOV
-      - type: effect
-        effect: slowness
-        action: remove
       # 平滑穿过三个路径点，最终到达出生点上方
       - type: path
         duration: 120

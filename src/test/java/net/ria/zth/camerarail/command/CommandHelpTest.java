@@ -27,7 +27,7 @@ class CommandHelpTest {
     private static final int MAX_LINE_WIDTH = ChatText.CHAT_WIDTH - 4;
     private static final List<String> EDITOR_COMMANDS = List.of(
             "gui", "status", "list", "help", "done", "close", "open", "create", "delete", "start", "exit",
-            "display", "track-sway", "follow", "add", "cut", "path", "point", "unpoint", "hold", "wait",
+            "exit-mode", "display", "track-sway", "follow", "add", "cut", "path", "point", "unpoint", "hold", "wait",
             "effect", "title", "here", "select", "duration", "easing", "sway", "up", "down", "remove",
             "undo", "preview", "stop", "save");
 

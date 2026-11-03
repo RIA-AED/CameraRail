@@ -102,6 +102,7 @@ public final class CommandHelp {
             new Entry("delete", "delete [confirm]", Group.SETTINGS, MANAGE),
             new Entry("start", "start", Group.SETTINGS, EDIT),
             new Entry("exit", "exit", Group.SETTINGS, EDIT),
+            new Entry("exit-mode", "exit-mode <animation-end|pre-entry>", Group.SETTINGS, EDIT),
             new Entry("display", "display <名称>", Group.SETTINGS, EDIT),
             new Entry("track-sway", "track-sway <预设>", Group.SETTINGS, EDIT),
             new Entry("follow", "follow <true|false>", Group.SETTINGS, EDIT),

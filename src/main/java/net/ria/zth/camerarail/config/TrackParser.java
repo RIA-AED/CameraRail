@@ -7,6 +7,7 @@ import net.ria.zth.camerarail.model.Easing;
 import net.ria.zth.camerarail.model.EffectAction;
 import net.ria.zth.camerarail.model.EffectSpec;
 import net.ria.zth.camerarail.model.EffectStep;
+import net.ria.zth.camerarail.model.ExitMode;
 import net.ria.zth.camerarail.model.HoldStep;
 import net.ria.zth.camerarail.model.MoveStep;
 import net.ria.zth.camerarail.model.PathStep;
@@ -60,13 +61,14 @@ public final class TrackParser {
         }
         String id = rawId.toLowerCase(Locale.ROOT);
         String base = "tracks." + rawId;
-        checkKeys(section, base, Set.of("display-name", "description", "world", "start", "exit",
+        checkKeys(section, base, Set.of("display-name", "description", "world", "start", "exit-mode", "exit",
                 "sway", "follow", "entry-effects", "steps"));
 
         String world = requiredString(section, "world", base + ".world");
         Pose start = parsePose(requiredSection(section, "start", base + ".start"), base + ".start");
         Pose exit = section.isSet("exit") ? parsePose(requiredSection(section, "exit", base + ".exit"),
                 base + ".exit") : null;
+        ExitMode exitMode = parseExitMode(section, base, exit);
         SwaySettings sway = parseTrackSway(section.get("sway"), base + ".sway", id);
         boolean follow = section.isSet("follow") ? requiredBoolean(section, "follow", base + ".follow")
                 : config.followCamera();
@@ -83,13 +85,33 @@ public final class TrackParser {
             }
         }
 
-        CameraTrack track = new CameraTrack(id, displayName, description, world, start, exit, sway,
-                follow, entryEffects, steps);
+        CameraTrack track = new CameraTrack(id, displayName, description, world, start, exitMode, exit,
+                sway, follow, entryEffects, steps);
         if (track.timedDurationTicks() > config.maxTrackTicks()) {
             throw new IllegalArgumentException(base + " is longer than limits.max-track-ticks ("
                     + config.maxTrackTicks() + " ticks)");
         }
         return track;
+    }
+
+    private ExitMode parseExitMode(ConfigurationSection section, String base, Pose exit) {
+        if (!section.isSet("exit-mode")) {
+            return exit == null ? ExitMode.ANIMATION_END : ExitMode.CUSTOM;
+        }
+        String raw = requiredString(section, "exit-mode", base + ".exit-mode");
+        ExitMode mode;
+        try {
+            mode = ExitMode.parse(raw);
+        } catch (IllegalArgumentException exception) {
+            throw new IllegalArgumentException(base + ".exit-mode: " + exception.getMessage());
+        }
+        if (mode == ExitMode.CUSTOM && exit == null) {
+            throw new IllegalArgumentException(base + ".exit-mode is 'custom' but " + base + ".exit is missing");
+        }
+        if (mode != ExitMode.CUSTOM && exit != null) {
+            throw new IllegalArgumentException(base + ".exit is only allowed with exit-mode: custom");
+        }
+        return mode;
     }
 
     private List<Step> parseSteps(ConfigurationSection section, String base) {
