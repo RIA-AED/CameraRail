@@ -1,0 +1,36 @@
+# ZthCameraRail 全局配置
+# 时间单位均为 tick，20 tick = 1 秒。
+
+schema-version: 1
+
+defaults:
+  # 未写 duration 的 move/path/hold 使用的时长
+  move-duration: 100
+  # 未写 easing 时使用的缓动
+  easing: ease-in-out
+  # 未写 sway 时使用的摇摆预设：off / gentle / natural / strong
+  sway: natural
+  # 摇摆基础周期，单位 tick。数值越大，摆动越慢
+  sway-period: 160
+
+session:
+  # 是否让玩家实体跟随镜头所在的区块。
+  # 旁观者客户端只接收玩家附近的区块；镜头移动到远处时，必须让玩家实体跟着走，
+  # 否则画面会进入未加载区块。若其他插件严格接管玩家位置，可以关闭。
+  follow-camera: true
+  # wait 步骤的默认超时，0 表示永不超时。超时后会结束镜头并恢复玩家原位置
+  wait-timeout: 6000
+  # 是否允许玩家按 Shift 主动退出镜头。默认关闭，避免误触
+  allow-sneak-exit: false
+  # 崩溃恢复：在开始轨道前保存玩家状态，正常结束后删除
+  recovery: true
+  # 恢复文件的最大有效期（小时），超过后自动清理
+  recovery-max-age-hours: 168
+
+limits:
+  max-steps: 256
+  max-path-points: 128
+  # 单条轨道内所有 move/path/hold 的时长上限
+  max-track-ticks: 72000
+
+debug: false

@@ -1,0 +1,125 @@
+package net.ria.zth.camerarail.listener;
+
+import com.destroystokyo.paper.event.player.PlayerStartSpectatingEntityEvent;
+import com.destroystokyo.paper.event.player.PlayerStopSpectatingEntityEvent;
+import net.ria.zth.camerarail.config.RailConfig;
+import net.ria.zth.camerarail.runtime.CameraEngine;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.Listener;
+import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.PlayerChangedWorldEvent;
+import org.bukkit.event.player.PlayerGameModeChangeEvent;
+import org.bukkit.event.player.PlayerJoinEvent;
+import org.bukkit.event.player.PlayerMoveEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
+import org.bukkit.event.player.PlayerTeleportEvent;
+import org.bukkit.event.player.PlayerToggleSneakEvent;
+
+import java.util.function.Supplier;
+
+/**
+ * All player-driven ways out of the spectator camera are funnelled here. The default
+ * policy is to keep the shot locked; external teleports/game-mode changes end the session
+ * instead of fighting the other plugin.
+ */
+public final class CameraListener implements Listener {
+    private final CameraEngine engine;
+    private final Supplier<RailConfig> config;
+
+    public CameraListener(CameraEngine engine, Supplier<RailConfig> config) {
+        this.engine = engine;
+        this.config = config;
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onJoin(PlayerJoinEvent event) {
+        engine.recoverOnJoin(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onKick(org.bukkit.event.player.PlayerKickEvent event) {
+        engine.handleKick(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onQuit(PlayerQuitEvent event) {
+        engine.handleQuit(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onToggleSneak(PlayerToggleSneakEvent event) {
+        if (!event.isSneaking() || !engine.shouldLockSpectator(event.getPlayer())) {
+            return;
+        }
+        if (!config.get().allowSneakExit()) {
+            event.setCancelled(true);
+            engine.hintLocked(event.getPlayer());
+            engine.reassertSpectator(event.getPlayer());
+        }
+    }
+
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onStopSpectating(PlayerStopSpectatingEntityEvent event) {
+        Player player = event.getPlayer();
+        if (engine.isInternalSpectatorChange(player) || !engine.shouldLockSpectator(player)) {
+            return;
+        }
+        if (config.get().allowSneakExit()) {
+            engine.handleSneakExit(player);
+            return;
+        }
+        event.setCancelled(true);
+        engine.hintLocked(player);
+        engine.reassertSpectator(player);
+    }
+
+    @EventHandler(priority = EventPriority.HIGH)
+    public void onStartSpectating(PlayerStartSpectatingEntityEvent event) {
+        Player player = event.getPlayer();
+        if (!engine.shouldLockSpectator(player)) {
+            return;
+        }
+        if (!engine.isCameraEntity(player, event.getNewSpectatorTarget())) {
+            event.setCancelled(true);
+            engine.hintLocked(player);
+            engine.reassertSpectator(player);
+        }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onGameModeChange(PlayerGameModeChangeEvent event) {
+        engine.handleExternalGameModeChange(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onTeleport(PlayerTeleportEvent event) {
+        engine.handleExternalTeleport(event.getPlayer());
+    }
+
+    /**
+     * The only server-observable sign that the client is driving its own body instead of the
+     * camera: a camera-locked client stops sending movement packets entirely.
+     */
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onMove(PlayerMoveEvent event) {
+        engine.handleClientMove(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onChangedWorld(PlayerChangedWorldEvent event) {
+        engine.handleWorldChange(event.getPlayer());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onDeath(PlayerDeathEvent event) {
+        engine.handleDeath(event.getEntity());
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onRespawn(PlayerRespawnEvent event) {
+        engine.handleWorldChange(event.getPlayer());
+    }
+}

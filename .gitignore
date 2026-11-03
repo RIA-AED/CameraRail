@@ -1,0 +1,12 @@
+target/
+server/
+.idea/
+*.iml
+.vscode/
+run/
+logs/
+
+.m2/
+server-folia/
+server-paper/
+paper-run*.log

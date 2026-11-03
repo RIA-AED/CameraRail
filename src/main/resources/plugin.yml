@@ -1,0 +1,36 @@
+name: ZthCameraRail
+version: 1.0.0
+main: net.ria.zth.camerarail.ZthCameraRailPlugin
+api-version: '26.1.2'
+folia-supported: true
+load: POSTWORLD
+description: 轻量的旁观者镜头轨道与过场动画，支持 Paper/Folia。
+authors: [RIA]
+commands:
+  zth-camera:
+    description: 管理镜头轨道、预览与游戏内编辑。
+    usage: /zth-camera help
+    aliases: [zc]
+    permission: zth.camera.command
+permissions:
+  zth.camera.command:
+    description: 使用镜头轨道命令（只负责进入命令；具体操作还需对应子权限）。
+    default: op
+  zth.camera.play:
+    description: 播放镜头轨道。
+    default: op
+  zth.camera.stop:
+    description: 结束镜头轨道。
+    default: op
+  zth.camera.advance:
+    description: 发送等待信号。
+    default: op
+  zth.camera.edit:
+    description: 使用游戏内轨道编辑器。
+    default: op
+  zth.camera.manage:
+    description: 创建和删除轨道。
+    default: op
+  zth.camera.reload:
+    description: 重载配置与轨道。
+    default: op
