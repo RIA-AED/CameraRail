@@ -450,16 +450,23 @@ public final class CameraEngine implements CameraService {
         // chunk is not loaded. teleportAsync loads the target chunk first.
         try {
             camera.teleportAsync(cameraPosition, PlayerTeleportEvent.TeleportCause.PLUGIN)
-                    .whenComplete((success, error) -> camera.getScheduler().execute(plugin, () -> {
-                        if (error != null || !Boolean.TRUE.equals(success)) {
-                            plugin.getLogger().log(Level.WARNING, "Could not position camera entity",
-                                    error);
+                    .whenComplete((success, error) -> {
+                        boolean scheduled = camera.getScheduler().execute(plugin, () -> {
+                            if (error != null || !Boolean.TRUE.equals(success)) {
+                                plugin.getLogger().log(Level.WARNING, "Could not position camera entity",
+                                        error);
+                                requestEnd(session, EndReason.CAMERA_LOST, RestoreMode.ORIGINAL, true, true);
+                                return;
+                            }
+                            session.player.getScheduler().execute(plugin, () -> teleportToStart(session),
+                                    () -> abandon(session), 0L);
+                        }, () -> abandon(session), 0L);
+                        if (!scheduled) {
+                            // EntityScheduler#schedule returns false for a retired scheduler without
+                            // running the retired callback; do not leave the start waiting for it.
                             requestEnd(session, EndReason.CAMERA_LOST, RestoreMode.ORIGINAL, true, true);
-                            return;
                         }
-                        session.player.getScheduler().execute(plugin, () -> teleportToStart(session),
-                                () -> abandon(session), 0L);
-                    }, () -> abandon(session), 0L));
+                    });
         } catch (RuntimeException exception) {
             plugin.getLogger().log(Level.WARNING, "Could not initialise camera entity", exception);
             requestEnd(session, EndReason.CAMERA_LOST, RestoreMode.ORIGINAL, true, true);
@@ -754,6 +761,7 @@ public final class CameraEngine implements CameraService {
      * only re-attaches once the client had time to interpolate the stand to its new pose.
      */
     private void beginCutSwitch(Session session, Pose target) {
+        session.cutMoveCompleted = false;
         session.cutSwitch = -1;
         if (config.get().debug()) {
             plugin.getLogger().info("hard cut: detaching the armor-stand camera for "
@@ -805,8 +813,15 @@ public final class CameraEngine implements CameraService {
                     session.cutSwitch = 0;
                     return;
                 }
-                camera.getScheduler().execute(plugin, () -> moveCameraForCut(session, camera, target),
+                boolean scheduled = camera.getScheduler().execute(plugin,
+                        () -> moveCameraForCut(session, camera, target),
                         () -> session.cutSwitch = 0, 0L);
+                if (!scheduled) {
+                    // EntityScheduler#schedule returns false for a retired scheduler without
+                    // running the retired callback; without this the cut would wait forever.
+                    session.cutSwitch = 0;
+                    requestEnd(session, EndReason.CAMERA_LOST, RestoreMode.ORIGINAL, true, true);
+                }
             });
         } catch (RuntimeException exception) {
             endInternalTeleport(session);
@@ -827,22 +842,28 @@ public final class CameraEngine implements CameraService {
                 target.yaw(), target.pitch());
         ensureCameraChunk(session, location);
         try {
+            // Do not touch the camera from the completion callback: on Folia a teleport across a
+            // region boundary replaces the entity object and may complete on the destination
+            // region's thread, where the old entity scheduler hop can be lost (leaving cutSwitch
+            // stuck forever). The state fields are volatile; failures end the session directly -
+            // requestEnd only CASes state and schedules on the player scheduler.
             camera.teleportAsync(location, PlayerTeleportEvent.TeleportCause.PLUGIN)
-                    .whenComplete((success, error) -> camera.getScheduler().execute(plugin, () -> {
+                    .whenComplete((success, error) -> {
+                        if (error == null && Boolean.TRUE.equals(success)) {
+                            // The camera tick turns this into the settle countdown, so the settle
+                            // still starts on the tick after the move - not on the completion thread.
+                            session.cutMoveCompleted = true;
+                            return;
+                        }
+                        session.cutSwitch = 0;
                         if (!isCurrent(session) || session.ending.get() || session.closed.get()) {
-                            session.cutSwitch = 0;
                             return;
                         }
-                        if (error != null || !Boolean.TRUE.equals(success)) {
-                            plugin.getLogger().log(Level.WARNING,
-                                    "Could not move the camera for a hard cut: " + session.player.getName(),
-                                    error);
-                            session.cutSwitch = 0;
-                            requestEnd(session, EndReason.CAMERA_LOST, RestoreMode.ORIGINAL, true, true);
-                            return;
-                        }
-                        session.cutSwitch = CUT_SWITCH_SETTLE_TICKS;
-                    }, () -> session.cutSwitch = 0, 0L));
+                        plugin.getLogger().log(Level.WARNING,
+                                "Could not move the camera for a hard cut: " + session.player.getName(),
+                                error);
+                        requestEnd(session, EndReason.CAMERA_LOST, RestoreMode.ORIGINAL, true, true);
+                    });
         } catch (RuntimeException exception) {
             session.cutSwitch = 0;
             plugin.getLogger().log(Level.WARNING,
@@ -855,7 +876,11 @@ public final class CameraEngine implements CameraService {
     private void advanceCutSwitch(Session session) {
         int phase = session.cutSwitch;
         if (phase < 0) {
-            // A detach/move/re-attach task is in flight; its callback clears the state.
+            // A detach/move/re-attach task is in flight; the move marks its completion.
+            if (session.cutMoveCompleted) {
+                session.cutMoveCompleted = false;
+                session.cutSwitch = CUT_SWITCH_SETTLE_TICKS;
+            }
             return;
         }
         if (phase > 1) {
@@ -1289,22 +1314,27 @@ public final class CameraEngine implements CameraService {
         session.pendingCameraTarget = null;
         session.cameraTeleportPending = true;
         try {
+            // The completion callback must not touch the camera. A teleport that crosses a
+            // Folia region boundary replaces the entity object and runs its completion on the
+            // destination region's thread, where any entity read fails the thread check - and a
+            // callback scheduled through the old entity scheduler can be lost entirely. Only the
+            // volatile hand-off state is written here; the next camera tick re-issues with the
+            // freshest target when a newer one is pending.
             camera.teleportAsync(target, PlayerTeleportEvent.TeleportCause.PLUGIN)
-                    .whenComplete((success, error) -> camera.getScheduler().execute(plugin, () -> {
+                    .whenComplete((success, error) -> {
                         session.cameraTeleportPending = false;
+                        if (error == null && Boolean.TRUE.equals(success)) {
+                            return;
+                        }
+                        // The completion may run on any region thread. requestEnd only CASes
+                        // session state and queues on the player scheduler, so it is safe here.
                         if (!isCurrent(session) || session.ending.get()) {
                             return;
                         }
-                        if (error != null || !Boolean.TRUE.equals(success)) {
-                            plugin.getLogger().log(Level.WARNING, "Camera teleport failed for "
-                                    + session.player.getName(), error);
-                            requestEnd(session, EndReason.CAMERA_LOST, RestoreMode.ORIGINAL, true, true);
-                            return;
-                        }
-                        if (session.pendingCameraTarget != null) {
-                            issueCameraTeleport(session, camera);
-                        }
-                    }, () -> session.cameraTeleportPending = false, 0L));
+                        plugin.getLogger().log(Level.WARNING, "Camera teleport failed for "
+                                + session.player.getName(), error);
+                        requestEnd(session, EndReason.CAMERA_LOST, RestoreMode.ORIGINAL, true, true);
+                    });
         } catch (RuntimeException exception) {
             session.cameraTeleportPending = false;
             plugin.getLogger().log(Level.WARNING, "Camera teleport threw for "
@@ -2146,6 +2176,53 @@ public final class CameraEngine implements CameraService {
 
     private boolean canSneakExit(Session session) {
         return !session.ending.get() && (session.preview || config.get().allowSneakExit());
+    }
+
+    /**
+     * Whether a spectator release was caused by the player pressing Shift. Vanilla only stops
+     * spectating from {@code ServerPlayer#tick}, and only when {@code wantsToStopRiding()} - the
+     * server-side sneak flag fed by the client's Shift input - is set. A release event received
+     * while that flag is clear was produced by the server (Folia replaces the camera entity with
+     * a new object when it crosses a region boundary and clears the stale target first) or by
+     * another plugin, so it must not be handled as a player input.
+     */
+    public boolean isPlayerInitiatedCameraExit(Player player) {
+        return player.isSneaking();
+    }
+
+    /**
+     * Handles a spectator release the server performed on its own: re-lock the shot without
+     * ending it, without the "locked" hint and without treating it as a Shift press. Preview
+     * sessions must survive this too - otherwise a far {@code cut} on Folia would end every
+     * preview early. The first occurrence per session is logged so the Folia cross-region
+     * handover is visible; later ones only at debug level.
+     */
+    public void handleServerCameraRelease(Player player) {
+        Session session = sessions.get(player.getUniqueId());
+        if (session == null || session.ending.get()) {
+            return;
+        }
+        int releases = session.serverCameraReleases.incrementAndGet();
+        if (releases == 1) {
+            Pose pose = session.currentPose;
+            plugin.getLogger().info("Server released the spectator camera for " + player.getName()
+                    + " without a Shift input; re-locking silently (track=" + session.track.id()
+                    + ", preview=" + session.preview + ", tick=" + session.totalTicks
+                    + ", folia=" + FOLIA + ", pose=" + poseCoordinates(pose) + ")."
+                    + (FOLIA
+                    ? " Expected when a Folia camera entity crosses a region boundary."
+                    : " No Shift input was seen; check for a server or plugin teleport."));
+        } else if (config.get().debug()) {
+            plugin.getLogger().info("Server released the spectator camera for " + player.getName()
+                    + " again (release #" + releases + ", track=" + session.track.id()
+                    + ", tick=" + session.totalTicks + "); re-locking silently.");
+        }
+        reassertSpectator(player);
+    }
+
+    /** Coordinates of a camera pose for log lines (not a block position). */
+    private static String poseCoordinates(Pose pose) {
+        return String.format(Locale.ROOT, "%.1f/%.1f/%.1f", pose.x(), pose.y(), pose.z());
     }
 
     /**

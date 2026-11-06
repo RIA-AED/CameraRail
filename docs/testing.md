@@ -66,6 +66,7 @@ java -jar paper-26.1.2-74.jar nogui
 10. 游戏内编辑：创建、追加、修改目标/时长/摇摆、wait/effect/title、预览、自动保存、重载。
 11. Folia 下使用实体调度器 + `teleportAsync`，镜头和区块跟随可用，无 Folia 线程异常。
 12. 播放开始、相机锁定后 ≤1 tick，被拍摄玩家客户端的定位条消失；`/zc stop`、自然结束、退出、外部传送等异常结束后 ≤1 tick 恢复。修改 `session.hide-locator-bar` 后 `/zc reload`，播放中的隐藏状态在 20 tick 内跟随配置（背景与命令见 [locator-bar.md](locator-bar.md) 第 9 节）。
+13. Folia 下远距离 `cut`（跨 region）：真实 `play` 不应出现“过场动画中无法离开镜头”动作栏提示，编辑器预览不应提前结束，且会话继续正常播放和退出。假玩家镜头下，服务端日志应出现一条 `Server released the spectator camera ... without a Shift input` INFO（该事件由服务端在镜头实体跨 region 时替换实体、清空旧旁观目标产生，插件不再把它当作 Shift 操作）；盔甲架回退模式的 `cut` 会主动解除并重新锁定相机，因此不产生这条日志，但同样应完整播放。Paper 上同一轨道通常不应出现该日志（镜头实体不会被替换；其他插件或传送路径主动释放相机时仍可能出现，且会走同一条静默重锁分支）。
 
 上述真实客户端验证是在本地离线测试服完成的；测试脚本属于临时环境，不随插件发布。假玩家镜头是 2026-11 新增的实现，服务端启动和 PacketEvents 注册已冒烟通过，但客户端画面仍需在目标客户端版本上按下一节验收。
 
@@ -83,6 +84,7 @@ java -jar paper-26.1.2-74.jar nogui
 8. Folia 下重复第 1、5 项，重点看玩家与盔甲架跨 region 时是否出现线程异常或假玩家位置滞后。
 9. 跨版本链路（客户端 26.2/26.3 经 ViaVersion 连接 26.1.2）单独测一遍 FOV：假玩家是客户端侧实体，链路可能不转发其属性包；目标环境应使用 26.1.2 原生客户端验收。
 10. 移除 PacketEvents 后重启，确认启动 WARN、GUI 回退状态、`/zc edit effect add` 的聊天栏提示，以及 `/zc play` 时只对相关轨道提示；纯 `nausea` 轨道不应触发这些提示。
+11. Folia 远距离 `cut`（跨 region）后：播放中按 Shift 仍应被锁定（出现一次锁定提示）；预览中按 Shift 仍应结束预览。无 Shift 的服务端释放分支不会被误判为 Shift——假玩家镜头下日志只出现 `Server released the spectator camera ... without a Shift input`，不会出现锁定提示，也不会结束预览；盔甲架回退模式不产生该事件，行为同上。
 
 ## 如何判断客户端真的附身了
 

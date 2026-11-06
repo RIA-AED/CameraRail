@@ -97,6 +97,8 @@ final class Session {
      * left before the client camera may be re-attached, negative = a switch task is in flight.
      */
     volatile int cutSwitch;
+    /** Set by the async anchor move of a fallback hard cut; consumed by the camera tick. */
+    volatile boolean cutMoveCompleted;
     volatile String activeStepDescription = "准备中";
     volatile String activeSway = "inherit";
     volatile int stepIndex;
@@ -115,6 +117,8 @@ final class Session {
     volatile int attachAttempts;
     /** Set while the plugin re-sends the camera packet, so the spectator events it raises are ours. */
     volatile boolean internalSpectatorChange;
+    /** Server-forced spectator releases (no Shift input) seen in this session; diagnostics only. */
+    final AtomicInteger serverCameraReleases = new AtomicInteger();
     /** Set when the client moved its own player after the camera settled: the camera did not lock. */
     volatile boolean clientMovedWhileAttached;
     volatile boolean clientMoveWarned;

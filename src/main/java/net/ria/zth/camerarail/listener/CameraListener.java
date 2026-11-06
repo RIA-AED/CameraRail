@@ -62,6 +62,16 @@ public final class CameraListener implements Listener {
         if (engine.isInternalSpectatorChange(player) || !engine.shouldLockSpectator(player)) {
             return;
         }
+        // A release the player did not cause (the server-side sneak flag is clear) must not be
+        // run through the Shift exit path. Folia replaces the camera entity when it is handed
+        // to another region and clears the stale target first; on Paper the same event comes
+        // from a lost camera entity, a server teleport that resets the camera, or another
+        // plugin. Keep the shot silently.
+        if (!engine.isPlayerInitiatedCameraExit(player)) {
+            event.setCancelled(true);
+            engine.handleServerCameraRelease(player);
+            return;
+        }
         if (engine.canSneakExit(player)) {
             engine.handleSneakExit(player);
             return;
