@@ -6,7 +6,7 @@ ZthCameraRail 是一个用于 Paper / Folia 的 Minecraft 摄像机轨道插件�
 
 ## 特性
 
-- 7 种轨道步骤：`move`、`path`、`hold`、`wait`、`cut`、`effect`、`title`
+- 7 种轨道步骤：`move`、`path`、`hold`、`wait`、`cut`、`effect`、`title`；`cut` 硬切后可选停留一段时间
 - `path` 使用向心 Catmull-Rom 曲线，按弧长参数化，可连续穿过多个路径点
 - 7 种缓动曲线，支持步骤级 `sway` 覆盖
 - `wait` 支持外部信号、提前信号排队和超时
@@ -124,6 +124,7 @@ tracks:
 /zc edit path                   # 追加路径步骤
 /zc edit point                  # 追加路径点
 /zc edit hold 40                # 追加停留
+/zc edit cut 40                 # 追加快切并停留 40t
 /zc edit wait login:ready       # 追加等待
 /zc edit effect add darkness
 /zc edit title 20 60 20 欢迎|正在同步
@@ -203,11 +204,11 @@ tracks:
 | `path` | 连续穿过多个路径点 | `points`、`duration`、`easing`、`sway` |
 | `hold` | 保持当前姿态 | `duration`、`sway` |
 | `wait` | 保持当前姿态直到收到信号或超时 | `signal`、`timeout`、`sway` |
-| `cut` | 瞬切到目标姿态 | `to`、`sway` |
+| `cut` | 瞬切到目标姿态，然后可选停留一段时间 | `to`、`duration`、`sway` |
 | `effect` | 添加或移除药水效果 | `effect`、`action`、`amplifier`、`duration` |
 | `title` | 发送标题和副标题 | `title`、`subtitle`、`fade-in`、`stay`、`fade-out` |
 
-`path` 的 `points` 是当前姿态之后的路径点，至少一个。`easing` 可选 `linear`、`ease-in`、`ease-out`、`ease-in-out`、`smoothstep`、`smootherstep`、`sine`。`wait` 的 `timeout` 省略时使用 `session.wait-timeout`。`title` 的文本使用 MiniMessage。`effect` 的 `action` 默认 `add`，`duration` 省略或为 `0` 时持续到显式移除或轨道结束。同一轨道内的 `wait` 信号名不能重复。
+`path` 的 `points` 是当前姿态之后的路径点，至少一个。`easing` 可选 `linear`、`ease-in`、`ease-out`、`ease-in-out`、`smoothstep`、`smootherstep`、`sine`。`wait` 的 `timeout` 省略时使用 `session.wait-timeout`。`title` 的文本使用 MiniMessage。`effect` 的 `action` 默认 `add`，`duration` 省略或为 `0` 时持续到显式移除或轨道结束。同一轨道内的 `wait` 信号名不能重复。`cut` 的 `duration` 省略或为 `0` 时是纯瞬时硬切，不占用时间轴；正整数 N 表示硬切后在新姿态停留 N tick，计入轨道总时长，整个过程没有过渡帧。
 
 ### 退出落点
 
@@ -235,7 +236,8 @@ tracks:
 - 轨道概览：查看步骤、总时长和摇摆；编辑轨道设置、起点、退出点、入场效果；预览整条轨道。
 - 步骤表单：按类型编辑全部字段，支持保存并返回、上一步/下一步、上移/下移、复制、删除和单步预览。
 - 坐标表单提供“取当前视角/取当前脚下位置”和“传送到此”；起点和步骤按眼睛坐标记录，退出点按脚部坐标记录。
-- 路径步骤有独立的路径点列表，可追加当前视角、插入、删除和上下移动。
+- 硬切步骤表单在目标姿态之外提供“硬切后停留”时长（tick，`0` 表示纯瞬时）。
+- 路径步骤有独立的路径点列表，可追加当前视角、插入、删除和上下移动；路径点表单也可以用“上一步/下一步”在相邻路径点之间切换，切换会丢弃未保存的输入。
 - 等待步骤可以复用已有信号；效果步骤提供常用效果列表，也允许输入任意注册 id。
 - 所有修改立即自动保存，可撤销最近 30 次；按 Esc 关闭后再执行 `/zc edit` 会回到上次的界面和页码。
 

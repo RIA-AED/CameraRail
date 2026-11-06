@@ -31,7 +31,7 @@ class TrackTimelineTest {
                 new PathStep(List.of(new Pose(20, 0, 0, 0, 0), new Pose(30, 0, 0, 0, 0)),
                         30, Easing.SINE, SwayPreset.NATURAL),
                 new TitleStep("t", "", 0, 0, 0),
-                new CutStep(new Pose(40, 0, 0, 0, 0), SwayPreset.STRONG),
+                new CutStep(new Pose(40, 0, 0, 0, 0), 15, SwayPreset.STRONG),
                 new HoldStep(5, SwayPreset.INHERIT)
         );
         track = new CameraTrack("test", "Test", "", "world",
@@ -69,14 +69,30 @@ class TrackTimelineTest {
     }
 
     @Test
-    void cumulativeTicksBeforeCountsOnlyTimedCameraSteps() {
+    void cumulativeTicksBeforeSumsTimedCameraSteps() {
         assertEquals(0, TrackTimeline.cumulativeTicksBefore(track, 0));
         assertEquals(20, TrackTimeline.cumulativeTicksBefore(track, 1));
         assertEquals(30, TrackTimeline.cumulativeTicksBefore(track, 2));
         assertEquals(60, TrackTimeline.cumulativeTicksBefore(track, 3));
         assertEquals(60, TrackTimeline.cumulativeTicksBefore(track, 4));
-        assertEquals(60, TrackTimeline.cumulativeTicksBefore(track, 5));
-        assertEquals(65, TrackTimeline.cumulativeTicksBefore(track, 6));
-        assertEquals(65, TrackTimeline.cumulativeTicksBefore(track, 99));
+        assertEquals(75, TrackTimeline.cumulativeTicksBefore(track, 5));
+        assertEquals(80, TrackTimeline.cumulativeTicksBefore(track, 6));
+        assertEquals(80, TrackTimeline.cumulativeTicksBefore(track, 99));
+    }
+
+    @Test
+    void cutWithoutDurationOccupiesNoTicks() {
+        CutStep instantCut = new CutStep(new Pose(40, 0, 0, 0, 0), 0, SwayPreset.STRONG);
+        CameraTrack instant = track.withSteps(List.of(instantCut, new HoldStep(5, SwayPreset.INHERIT)));
+
+        assertEquals(0, instantCut.timedDurationTicks());
+        assertEquals(0, TrackTimeline.cumulativeTicksBefore(instant, 1));
+        assertEquals(5, instant.timedDurationTicks());
+    }
+
+    @Test
+    void cutHoldDurationCountsTowardTheTrackTimeline() {
+        assertEquals(80, track.timedDurationTicks());
+        assertEquals(15, ((CutStep) track.steps().get(4)).timedDurationTicks());
     }
 }

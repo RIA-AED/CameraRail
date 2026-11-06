@@ -389,7 +389,12 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
                     editors.addMove(player, duration);
                 }
             }
-            case "cut" -> editors.addCut(player);
+            case "cut" -> {
+                Integer duration = optionalInt(sender, args, 2, 0);
+                if (duration != null) {
+                    editors.addCut(player, duration);
+                }
+            }
             case "path" -> editors.addPath(player);
             case "point" -> editors.addPathPoint(player);
             case "unpoint" -> editors.removePathPoint(player);

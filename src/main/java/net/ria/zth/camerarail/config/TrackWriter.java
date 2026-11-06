@@ -142,6 +142,9 @@ public final class TrackWriter {
             }
             case CutStep cut -> {
                 map.put("to", poseMap(cut.to()));
+                if (cut.durationTicks() > 0) {
+                    map.put("duration", cut.durationTicks());
+                }
                 putSway(map, cut.sway());
             }
             case EffectStep effect -> {

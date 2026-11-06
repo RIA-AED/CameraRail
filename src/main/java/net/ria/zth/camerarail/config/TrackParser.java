@@ -165,8 +165,12 @@ public final class TrackParser {
                 yield new WaitStep(signal, timeout, sway);
             }
             case "cut" -> {
-                checkKeys(section, path, Set.of("type", "sway", "to"));
-                yield new CutStep(parsePose(requiredSection(section, "to", path + ".to"), path + ".to"), sway);
+                checkKeys(section, path, Set.of("type", "sway", "to", "duration"));
+                Pose to = parsePose(requiredSection(section, "to", path + ".to"), path + ".to");
+                // 0 keeps the legacy pure cut: the jump occupies no ticks.
+                int duration = nonNegativeInt(section, "duration", path + ".duration",
+                        config.maxTrackTicks(), 0);
+                yield new CutStep(to, duration, sway);
             }
             case "effect" -> {
                 checkKeys(section, path, Set.of("type", "effect", "action", "amplifier", "duration"));

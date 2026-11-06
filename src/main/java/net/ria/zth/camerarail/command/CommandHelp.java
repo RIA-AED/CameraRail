@@ -107,7 +107,7 @@ public final class CommandHelp {
             new Entry("track-sway", "track-sway <预设>", Group.SETTINGS, EDIT),
             new Entry("follow", "follow <true|false>", Group.SETTINGS, EDIT),
             new Entry("add", "add [时长]", Group.STEP, EDIT),
-            new Entry("cut", "cut", Group.STEP, EDIT),
+            new Entry("cut", "cut [时长]", Group.STEP, EDIT),
             new Entry("path", "path", Group.STEP, EDIT),
             new Entry("point", "point", Group.STEP, EDIT),
             new Entry("unpoint", "unpoint", Group.STEP, EDIT),

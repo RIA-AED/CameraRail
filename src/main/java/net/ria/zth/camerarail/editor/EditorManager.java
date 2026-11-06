@@ -277,7 +277,7 @@ public final class EditorManager implements Listener {
                 SwayPreset.INHERIT), "editor.added");
     }
 
-    public void addCut(Player player) {
+    public void addCut(Player player, int durationTicks) {
         EditorSession session = requireEditor(player);
         if (session == null) {
             return;
@@ -286,7 +286,8 @@ public final class EditorManager implements Listener {
         if (pose == null) {
             return;
         }
-        append(player, session, new CutStep(pose, SwayPreset.INHERIT), "editor.added");
+        int safeDuration = Math.max(0, Math.min(config.get().maxTrackTicks(), durationTicks));
+        append(player, session, new CutStep(pose, safeDuration, SwayPreset.INHERIT), "editor.added");
     }
 
     public void addPath(Player player) {
@@ -457,7 +458,7 @@ public final class EditorManager implements Listener {
         }
         Step replacement = switch (step) {
             case MoveStep move -> new MoveStep(pose, move.durationTicks(), move.easing(), move.sway());
-            case CutStep cut -> new CutStep(pose, cut.sway());
+            case CutStep cut -> new CutStep(pose, cut.durationTicks(), cut.sway());
             case PathStep path -> {
                 if (path.points().size() >= config.get().maxPathPoints()) {
                     messages.get().send(player, "editor.invalid-value", "value", "路径点数量已达上限");
@@ -491,14 +492,20 @@ public final class EditorManager implements Listener {
             case MoveStep move -> new MoveStep(move.to(), safe, move.easing(), move.sway());
             case PathStep path -> new PathStep(path.points(), safe, path.easing(), path.sway());
             case HoldStep hold -> new HoldStep(safe, hold.sway());
+            // 0 is meaningful for a cut: it drops the post-jump hold entirely.
+            case CutStep cut -> new CutStep(cut.to(),
+                    Math.max(0, Math.min(config.get().maxTrackTicks(), ticks)), cut.sway());
             default -> null;
         };
         if (replacement == null) {
             messages.get().send(player, "editor.need-duration");
             return;
         }
-        replaceSelected(player, session, replacement, false);
-        messages.get().send(player, "editor.duration-set", "ticks", String.valueOf(safe));
+        if (!replaceSelected(player, session, replacement, false)) {
+            return;
+        }
+        int applied = replacement instanceof CameraStep cameraStep ? cameraStep.timedDurationTicks() : safe;
+        messages.get().send(player, "editor.duration-set", "ticks", String.valueOf(applied));
     }
 
     public void setEasing(Player player, String raw) {
@@ -811,16 +818,19 @@ public final class EditorManager implements Listener {
         replaceSelected(player, session, step, true);
     }
 
-    private void replaceSelected(Player player, EditorSession session, Step step, boolean announce) {
+    /**
+     * @return true when the step was written; false when validation rejected it
+     */
+    private boolean replaceSelected(Player player, EditorSession session, Step step, boolean announce) {
         if (session.selected < 0 || session.selected >= session.draft.steps().size()) {
             messages.get().send(player, "editor.no-step");
-            return;
+            return false;
         }
         Step previous = session.draft.steps().get(session.selected);
         long totalAfter = session.draft.timedDurationTicks() - timedTicks(previous) + timedTicks(step);
         if (totalAfter > config.get().maxTrackTicks()) {
             messages.get().send(player, "editor.limit", "limit", "总时长上限 " + config.get().maxTrackTicks() + "t");
-            return;
+            return false;
         }
         session.remember();
         List<Step> steps = new ArrayList<>(session.draft.steps());
@@ -831,6 +841,7 @@ public final class EditorManager implements Listener {
             messages.get().send(player, "editor.updated",
                     "index", String.valueOf(session.selected + 1), "summary", step.describe());
         }
+        return true;
     }
 
     private void persisted(Player player, EditorSession session) {
@@ -917,7 +928,7 @@ public final class EditorManager implements Listener {
             case PathStep path -> new PathStep(path.points(), path.durationTicks(), path.easing(), sway);
             case HoldStep hold -> new HoldStep(hold.durationTicks(), sway);
             case WaitStep wait -> new WaitStep(wait.signal(), wait.timeoutTicks(), sway);
-            case CutStep cut -> new CutStep(cut.to(), sway);
+            case CutStep cut -> new CutStep(cut.to(), cut.durationTicks(), sway);
             default -> null;
         };
     }

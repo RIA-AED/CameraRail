@@ -588,7 +588,9 @@ public final class EditorUI implements Listener {
             case PathStep path -> path.points().size() + "点 · " + path.durationTicks() + "t · " + time;
             case HoldStep hold -> hold.durationTicks() + "t · " + time;
             case WaitStep wait -> "等待 · " + time;
-            case CutStep cut -> "瞬时 · " + time;
+            case CutStep cut -> cut.durationTicks() > 0
+                    ? "硬切 " + cut.durationTicks() + "t · " + time
+                    : "瞬时 · " + time;
             case EffectStep effect -> "瞬时 · " + time;
             case TitleStep title -> "瞬时 · " + time;
         };
@@ -612,7 +614,12 @@ public final class EditorUI implements Listener {
             case HoldStep hold -> text.append("时长: ").append(ticksLabel(hold.durationTicks()));
             case WaitStep wait -> text.append("信号: ").append(wait.signal()).append('\n')
                     .append("超时: ").append(wait.timeoutTicks() == 0 ? "永不" : ticksLabel(wait.timeoutTicks()));
-            case CutStep cut -> text.append("目标: ").append(poseShort(cut.to()));
+            case CutStep cut -> {
+                text.append("目标: ").append(poseShort(cut.to()));
+                if (cut.durationTicks() > 0) {
+                    text.append('\n').append("停留: ").append(ticksLabel(cut.durationTicks()));
+                }
+            }
             case EffectStep effect -> text.append(effect.effect().describe());
             case TitleStep title -> text.append("标题: ")
                     .append(title.title().isBlank() ? "(空)" : title.title()).append('\n')
@@ -655,7 +662,7 @@ public final class EditorUI implements Listener {
             Step step = switch (type) {
                 case MOVE -> new MoveStep(eyePose(player), config.get().defaultMoveDuration(),
                         config.get().defaultEasing(), SwayPreset.INHERIT);
-                case CUT -> new CutStep(eyePose(player), SwayPreset.INHERIT);
+                case CUT -> new CutStep(eyePose(player), 0, SwayPreset.INHERIT);
                 case HOLD -> new HoldStep(config.get().defaultMoveDuration(), SwayPreset.INHERIT);
                 case WAIT -> new WaitStep("signal", config.get().defaultWaitTimeoutTicks(), SwayPreset.INHERIT);
                 case EFFECT -> effectStep("darkness", EffectAction.ADD, 0, 0);
@@ -711,13 +718,16 @@ public final class EditorUI implements Listener {
     private void showMoveForm(boolean cut, Player player, int index, boolean adding, Step step,
                               Map<String, String> values, Notice notice) {
         Pose pose = cut ? ((CutStep) step).to() : ((MoveStep) step).to();
-        int duration = cut ? 0 : ((MoveStep) step).durationTicks();
+        int duration = cut ? ((CutStep) step).durationTicks() : ((MoveStep) step).durationTicks();
         Easing easing = cut ? Easing.EASE_IN_OUT : ((MoveStep) step).easing();
         SwayPreset sway = cut ? ((CutStep) step).sway() : ((MoveStep) step).sway();
 
         List<DialogInput> inputs = new ArrayList<>();
         addPoseInputs(inputs, pose, values);
-        if (!cut) {
+        if (cut) {
+            inputs.add(textInput("duration", "硬切后停留 (tick，0 = 瞬时)",
+                    value(values, "duration", String.valueOf(duration)), 16));
+        } else {
             inputs.add(textInput("duration", "时长 (tick)", value(values, "duration", String.valueOf(duration)), 16));
             inputs.add(singleOption("easing", "缓动", easingEntries(value(values, "easing", easingName(easing)))));
         }
@@ -749,7 +759,8 @@ public final class EditorUI implements Listener {
             Pose pose = parsePose(raw);
             Step updated;
             if (cut) {
-                updated = new CutStep(pose, parseSway(raw.get("sway"), true));
+                int duration = integer(raw, "duration", 0, config.get().maxTrackTicks(), "停留时长");
+                updated = new CutStep(pose, duration, parseSway(raw.get("sway"), true));
             } else {
                 int duration = integer(raw, "duration", 1, config.get().maxTrackTicks(), "时长");
                 Easing easing = Easing.parse(value(raw, "easing", "ease-in-out"));
@@ -1325,6 +1336,14 @@ public final class EditorUI implements Listener {
                 p -> teleportToPose(p, pose, false)));
         buttons.add(button("插入当前视角", "关闭窗口并立即在这个点之后插入一个点", p ->
                 capturePose(p, false, captured -> insertPathPoint(p, pointIndex, captured))));
+        if (pointIndex > 0) {
+            buttons.add(button("<- 上一步", "不保存当前输入，按已保存内容切到上一个路径点",
+                    p -> showPathPointForm(p, pointIndex - 1, null, null)));
+        }
+        if (pointIndex + 1 < path.points().size()) {
+            buttons.add(button("下一步 ->", "不保存当前输入，按已保存内容切到下一个路径点",
+                    p -> showPathPointForm(p, pointIndex + 1, null, null)));
+        }
         buttons.add(button("上移", "与前一个路径点交换", p -> movePathPoint(p, pointIndex, -1)));
         buttons.add(button("下移", "与后一个路径点交换", p -> movePathPoint(p, pointIndex, 1)));
         buttons.add(button("删除", "删除这个路径点（至少保留一个）", p -> deletePathPoint(p, pointIndex)));

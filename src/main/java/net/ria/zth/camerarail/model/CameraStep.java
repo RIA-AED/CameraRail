@@ -8,7 +8,8 @@ public sealed interface CameraStep extends Step
     SwayPreset sway();
 
     /**
-     * Number of ticks this step occupies. Waits and cuts have no fixed duration.
+     * Number of ticks this step occupies on the timeline. Waits have no fixed duration;
+     * a cut returns its post-jump hold, which is {@code 0} for a pure instant cut.
      */
     int timedDurationTicks();
 }

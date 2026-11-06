@@ -3,6 +3,7 @@ package net.ria.zth.camerarail;
 import net.ria.zth.camerarail.config.RailConfig;
 import net.ria.zth.camerarail.config.TrackParser;
 import net.ria.zth.camerarail.model.CameraTrack;
+import net.ria.zth.camerarail.model.CutStep;
 import net.ria.zth.camerarail.model.Easing;
 import net.ria.zth.camerarail.model.ExitMode;
 import net.ria.zth.camerarail.model.MoveStep;
@@ -67,6 +68,56 @@ class TrackParserTest {
         PathStep path = assertInstanceOf(PathStep.class, track.steps().get(3));
         assertEquals(2, path.points().size());
         assertEquals(120, track.timedDurationTicks());
+    }
+
+    @Test
+    void parsesCutHoldDurationAndDefaultsToAnInstantCut() {
+        CameraTrack track = parse("""
+                world: world
+                start: { x: 0, y: 64, z: 0 }
+                steps:
+                  - type: cut
+                    to: { x: 1, y: 64, z: 1, yaw: 90, pitch: 0 }
+                    duration: 40
+                  - type: cut
+                    to: { x: 2, y: 64, z: 2, yaw: 180, pitch: 0 }
+                """);
+
+        CutStep held = assertInstanceOf(CutStep.class, track.steps().get(0));
+        assertEquals(40, held.durationTicks());
+        assertEquals(40, held.timedDurationTicks());
+        assertEquals(SwayPreset.INHERIT, held.sway());
+        assertEquals("硬切 40t", held.describe());
+
+        CutStep instant = assertInstanceOf(CutStep.class, track.steps().get(1));
+        assertEquals(0, instant.durationTicks());
+        assertEquals(0, instant.timedDurationTicks());
+        assertEquals("硬切", instant.describe());
+
+        assertEquals(40, track.timedDurationTicks());
+    }
+
+    @Test
+    void rejectsCutDurationsOutsideTheConfiguredLimit() {
+        IllegalArgumentException negative = assertThrows(IllegalArgumentException.class, () -> parse("""
+                world: world
+                start: { x: 0, y: 64, z: 0 }
+                steps:
+                  - type: cut
+                    to: { x: 1, y: 64, z: 1 }
+                    duration: -1
+                """));
+        assertTrue(negative.getMessage().contains(".duration"), negative.getMessage());
+
+        IllegalArgumentException tooLong = assertThrows(IllegalArgumentException.class, () -> parse("""
+                world: world
+                start: { x: 0, y: 64, z: 0 }
+                steps:
+                  - type: cut
+                    to: { x: 1, y: 64, z: 1 }
+                    duration: 72001
+                """));
+        assertTrue(tooLong.getMessage().contains(".duration"), tooLong.getMessage());
     }
 
     @Test

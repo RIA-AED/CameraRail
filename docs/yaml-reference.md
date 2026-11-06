@@ -170,9 +170,11 @@ entry-effects:
 ```yaml
 - type: cut
   to: { x: 0.5, y: 70.0, z: 0.5, yaw: 180, pitch: 0 }
+  duration: 40          # tick；省略或 0 = 纯瞬时硬切
+  sway: natural         # 可选，和其他镜头步骤一致
 ```
 
-瞬切。用于有意的硬切/分镜。
+瞬切，用于有意的硬切/分镜。步骤的第一个 tick 直接跳到 `to`（没有过渡帧）；`duration` 省略或为 `0` 时是纯瞬时硬切，不占用时间轴，下一个步骤在同一 tick 开始；正整数 N 表示硬切后在新姿态停留 N tick，停留期间仍然摇摆，这些 tick 计入轨道总时长与 `limits.max-track-ticks`。无论是否停留，步骤结束后的姿态都是 `to`。
 
 ### effect
 
@@ -246,7 +248,7 @@ tracks:
 ## 限制与校验
 
 - 单条轨道只能有一个世界。
-- 所有 `move`/`path`/`hold` 的时长总和不能超过 `limits.max-track-ticks`。
+- 所有 `move`/`path`/`hold`/`cut` 的时长总和不能超过 `limits.max-track-ticks`。
 - `steps` 数量不能超过 `limits.max-steps`。
 - `path.points` 不能超过 `limits.max-path-points`。
 - 未知字段、重复 wait 信号、越界 pitch、未知效果名、未知缓动/摇摆预设都会报错，错误信息包含具体 YAML 路径。

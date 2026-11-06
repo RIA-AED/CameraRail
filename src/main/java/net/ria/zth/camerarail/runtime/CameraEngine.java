@@ -754,11 +754,24 @@ public final class CameraEngine implements CameraService {
                 return;
             }
             if (step instanceof CutStep cutStep) {
-                session.enterStep(step);
-                session.currentPose = cutStep.to();
-                session.stepIndex++;
-                session.stepTicks = 0;
-                continue;
+                // The jump itself has no transition. A positive duration then holds the new
+                // pose (sway included) for that many ticks; duration 0 stays a pure cut that
+                // occupies no ticks, so the following step starts on this very tick.
+                if (session.stepTicks == 0) {
+                    session.enterStep(step);
+                    session.currentPose = cutStep.to();
+                    if (cutStep.durationTicks() == 0) {
+                        session.stepIndex++;
+                        continue;
+                    }
+                }
+                session.stepTicks++;
+                updateCamera(session);
+                if (session.stepTicks >= cutStep.durationTicks()) {
+                    session.stepIndex++;
+                    session.stepTicks = 0;
+                }
+                return;
             }
             if (step instanceof CameraStep) {
                 if (session.stepTicks == 0) {

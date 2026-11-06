@@ -4,6 +4,7 @@ import net.ria.zth.camerarail.config.RailConfig;
 import net.ria.zth.camerarail.config.TrackParser;
 import net.ria.zth.camerarail.config.TrackWriter;
 import net.ria.zth.camerarail.model.CameraTrack;
+import net.ria.zth.camerarail.model.CutStep;
 import net.ria.zth.camerarail.model.Easing;
 import net.ria.zth.camerarail.model.ExitMode;
 import net.ria.zth.camerarail.model.HoldStep;
@@ -23,6 +24,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 class TrackWriterTest {
@@ -62,6 +64,35 @@ class TrackWriterTest {
         assertEquals(track.sway().x(), reparsed.sway().x());
         assertEquals(ExitMode.ANIMATION_END, reparsed.exitMode());
         assertEquals(track.steps().get(3).type(), reparsed.steps().get(3).type());
+    }
+
+    @Test
+    void roundTripsCutHoldDurations(@TempDir Path tempDir) throws Exception {
+        CameraTrack track = new CameraTrack("cuts", "Cuts", "", "world", new Pose(0, 64, 0, 0, 0),
+                ExitMode.ANIMATION_END, null,
+                SwaySettings.ofPreset(SwayPreset.NATURAL, 160, TrackParser.defaultSeed("cuts")), false,
+                List.of(),
+                List.of(
+                        new CutStep(new Pose(1, 64, 1, 90, 0), 40, SwayPreset.NATURAL),
+                        new CutStep(new Pose(2, 65, 2, 180, -5), 0, SwayPreset.INHERIT)
+                ));
+
+        Path file = tempDir.resolve("tracks.yml");
+        TrackWriter.write(file, Map.of(track.id(), track), CONFIG);
+
+        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file.toFile());
+        ConfigurationSection section = yaml.getConfigurationSection("tracks.cuts");
+        assertNotNull(section);
+        List<Map<?, ?>> written = section.getMapList("steps");
+        assertEquals(40, ((Number) written.get(0).get("duration")).intValue());
+        assertFalse(written.get(1).containsKey("duration"), "a pure instant cut should not write duration");
+
+        CameraTrack reparsed = new TrackParser(CONFIG).parseTrack("cuts", section);
+        assertEquals(track.steps(), reparsed.steps());
+        assertEquals(40, reparsed.timedDurationTicks());
+        CutStep held = (CutStep) reparsed.steps().get(0);
+        assertEquals(40, held.durationTicks());
+        assertEquals(0, ((CutStep) reparsed.steps().get(1)).durationTicks());
     }
 
     @Test
