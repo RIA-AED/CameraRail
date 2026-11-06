@@ -1,5 +1,5 @@
 name: ZthCameraRail
-version: 1.0.0
+version: 1.0.1
 main: net.ria.zth.camerarail.ZthCameraRailPlugin
 api-version: '26.1.2'
 folia-supported: true

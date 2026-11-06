@@ -6,7 +6,7 @@
 
     <groupId>net.ria.zth</groupId>
     <artifactId>ZthCameraRail</artifactId>
-    <version>1.0.0</version>
+    <version>1.0.1</version>
     <name>ZthCameraRail</name>
     <description>Lightweight spectator camera tracks and cutscenes for Paper/Folia.</description>
 
