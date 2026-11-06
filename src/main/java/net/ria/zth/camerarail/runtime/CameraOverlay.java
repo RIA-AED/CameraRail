@@ -63,6 +63,16 @@ public interface CameraOverlay extends AutoCloseable {
         void setMovementSpeed(double speed);
 
         /**
+         * Re-creates the client-only camera entity at {@code eyePose} and points the client
+         * camera at the new entity in the same tick, so a hard cut is a frame jump instead
+         * of the client interpolating the previous entity towards the new pose.
+         *
+         * <p>The new entity must keep the movement-speed attribute and the camera-visible
+         * effects that were applied to the previous one, or FOV/blindness would reset.</p>
+         */
+        void hardCut(Pose eyePose);
+
+        /**
          * Applies a camera-visible effect. Effects that only render on the local player
          * (nausea) are ignored by the overlay.
          */

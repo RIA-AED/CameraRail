@@ -24,6 +24,11 @@ session:
   # 预览（UI 预览和 /zc preview）总是允许 Shift 结束，不受这个开关影响。
   # 默认关闭，避免误触。
   allow-sneak-exit: false
+  # 播放期间隐藏被拍摄玩家的原版定位条（locator bar）。
+  # 只影响该玩家：给其 waypoint_receive_range 加一个临时修正符，使其不再接收
+  # waypoint；不读写基础值，也不影响其他插件对该属性的修改。结束、退出或异常
+  # 结束时移除；修正符不落盘，崩溃/重登不会残留。
+  hide-locator-bar: true
   # 崩溃恢复：在开始轨道前保存玩家状态，正常结束后删除
   recovery: true
   # 恢复文件的最大有效期（小时），超过后自动清理

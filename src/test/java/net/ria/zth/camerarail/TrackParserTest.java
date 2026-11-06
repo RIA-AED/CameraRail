@@ -26,7 +26,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class TrackParserTest {
     private static final RailConfig CONFIG = new RailConfig(
-            100, Easing.EASE_IN_OUT, SwayPreset.NATURAL, 160, true, 6000, false, false,
+            100, Easing.EASE_IN_OUT, SwayPreset.NATURAL, 160, true, 6000, false, true, false,
             7L * 24 * 60 * 60 * 1000, 256, 128, 72000, false);
 
     @Test

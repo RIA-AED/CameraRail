@@ -87,6 +87,23 @@ final class CameraEntitySync {
     }
 
     /**
+     * Forgets the cadence and head-yaw state of the current entity.
+     *
+     * <p>A hard cut replaces the client-only entity: the new entity has received neither a
+     * position nor a head-look packet yet, so its per-entity cadence has to start over.
+     * After this call the next {@link #tick(float)} reports both packets again.</p>
+     *
+     * <p>The packed head yaw is only a "same interpolation target" key, so clearing it
+     * together with {@code headLookSent} makes the first tick after a respawn send its own
+     * head yaw instead of comparing it against the destroyed entity's one.</p>
+     */
+    void reset() {
+        ticks = 0;
+        headLookSent = false;
+        lastPackedHeadYaw = 0;
+    }
+
+    /**
      * Packs a yaw exactly like the PacketEvents head-look writer.
      *
      * <p>The writer computes {@code (int) (yaw * 0.7111111f)} and writes the low byte, so

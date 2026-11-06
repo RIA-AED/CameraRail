@@ -89,6 +89,24 @@ public final class CameraListener implements Listener {
         engine.handleExternalGameModeChange(event.getPlayer());
     }
 
+    /**
+     * Vanilla lets a spectator teleport to another player with the number keys (or the
+     * spectator menu). That arrives as a body teleport with {@link PlayerTeleportEvent.TeleportCause#SPECTATE}
+     * and, without this veto, would be treated as an external teleport and end the shot.
+     * The shot stays locked instead; other teleport causes keep the existing "external
+     * teleport ends the session" policy.
+     */
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
+    public void onSpectatorTeleport(PlayerTeleportEvent event) {
+        if (event.getCause() != PlayerTeleportEvent.TeleportCause.SPECTATE
+                || !engine.shouldLockSpectator(event.getPlayer())) {
+            return;
+        }
+        event.setCancelled(true);
+        engine.hintLocked(event.getPlayer());
+        engine.reassertSpectator(event.getPlayer());
+    }
+
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onTeleport(PlayerTeleportEvent event) {
         engine.handleExternalTeleport(event.getPlayer());

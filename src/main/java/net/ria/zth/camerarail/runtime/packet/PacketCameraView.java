@@ -33,6 +33,8 @@ import org.bukkit.potion.PotionEffectType;
 
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Level;
@@ -47,26 +49,46 @@ import java.util.logging.Level;
  * camera reads the entity's <em>head</em> yaw, so the position-only sync alone would leave
  * the view frozen at the spawn rotation; see {@link CameraEntitySync}. The server's armor
  * stand keeps providing chunk loading, the spectator snap and follow teleports.</p>
+ *
+ * <p>A {@code cut} step cannot use that cadence: the client interpolates a player entity's
+ * position and head yaw over about three ticks, so a sync would make the cut glide. The
+ * view therefore re-creates the entity at the cut pose with {@link #hardCut(Pose)} and
+ * points Set Camera at the new entity in the same tick; a camera-target switch is applied
+ * immediately and the fresh entity has no interpolation state to glide from.</p>
  */
 final class PacketCameraView implements CameraOverlay.CameraView {
     /** Vanilla standing-player eye height, used to convert the eye pose to entity feet. */
     private static final double PLAYER_EYE_HEIGHT = 1.62;
     private static final byte INVISIBLE_FLAG = 0x20;
+    /** The walking speed the client gives every fresh RemotePlayer; FOV is driven from here. */
+    private static final double DEFAULT_MOVEMENT_SPEED = 0.1;
 
     private final PacketCameraOverlay overlay;
     private final Player player;
-    private final int entityId;
     private final int anchorEntityId;
     private final int playerEntityId;
     private final User user;
-    private final java.util.UUID profileId;
-    private final String profileName;
+    /** The eye pose the session attached at; only the initial spawn uses it. */
     private final Pose initialPose;
     private final AtomicBoolean active = new AtomicBoolean();
     private final AtomicBoolean destroyed = new AtomicBoolean();
     /** Decides the position cadence and the packed head-yaw dedup for every camera tick. */
     private final CameraEntitySync entitySync = new CameraEntitySync();
-    private volatile double movementSpeed = 0.1;
+    /**
+     * Camera-visible effects currently applied to the fake entity, so a hard cut can re-send
+     * them to the re-created entity. Nausea is never in here: it must stay on the real player.
+     */
+    private final Map<PotionType, EffectSpec> cameraEffects = new ConcurrentHashMap<>();
+    /**
+     * The id of the current client-only entity. Mutable and {@code volatile} because a hard
+     * cut replaces the entity while the overlay's packet listener reads the id from the
+     * netty thread to rewrite Set Camera packets.
+     */
+    private volatile int entityId;
+    /** Profile of the current client-only entity; replaced together with {@link #entityId}. */
+    private java.util.UUID profileId;
+    private String profileName;
+    private volatile double movementSpeed = DEFAULT_MOVEMENT_SPEED;
     private volatile boolean sendFailureLogged;
 
     PacketCameraView(
@@ -83,8 +105,7 @@ final class PacketCameraView implements CameraOverlay.CameraView {
         this.anchorEntityId = anchor.getEntityId();
         this.playerEntityId = player.getEntityId();
         this.profileId = java.util.UUID.randomUUID();
-        this.profileName = "ZthCam" + String.format(java.util.Locale.ROOT, "%06X",
-                ThreadLocalRandom.current().nextInt(0x1000000));
+        this.profileName = newProfileName();
         this.initialPose = eyePose;
     }
 
@@ -94,7 +115,73 @@ final class PacketCameraView implements CameraOverlay.CameraView {
      * its movement-speed attribute.
      */
     void spawn() {
-        UserProfile profile = new UserProfile(profileId, profileName);
+        sendPlayerInfo(profileId, profileName);
+        sendEntitySpawn(entityId, profileId, initialPose, DEFAULT_MOVEMENT_SPEED);
+        // The server is about to send Set Camera(anchor); the listener rewrites it. Sending
+        // the fake target here as well means a late or dropped server packet cannot leave
+        // the client in free spectator mode, and it establishes the target before the first
+        // position sync.
+        sendCamera(entityId);
+        active.set(true);
+    }
+
+    /**
+     * Re-creates the client-only camera entity at {@code eyePose} and points the client
+     * camera at it in the same tick, so a hard cut is a frame jump instead of a glide.
+     *
+     * <p>The client interpolates a player entity's position and head yaw over about three
+     * ticks, so moving the existing entity would make the cut slide. A camera-target switch
+     * is applied immediately instead, and a freshly spawned entity has no interpolation
+     * state to slide from. The old entity and its player-info entry are both removed, so the
+     * tab list and entity tracker do not accumulate one fake player per cut.</p>
+     */
+    @Override
+    public void hardCut(Pose eyePose) {
+        if (eyePose == null || !active()) {
+            return;
+        }
+        int previousEntityId = entityId;
+        java.util.UUID previousProfileId = profileId;
+        int newEntityId = SpigotReflectionUtil.generateEntityId();
+        java.util.UUID newProfileId = java.util.UUID.randomUUID();
+        String replacementProfileName = newProfileName();
+        // Publish the new identity before sending any packet: the overlay's listener runs on
+        // the netty thread and must rewrite a concurrent server Set Camera packet to the new
+        // entity, not to the one that is about to be destroyed.
+        entityId = newEntityId;
+        profileId = newProfileId;
+        profileName = replacementProfileName;
+        try {
+            user.sendPacket(new WrapperPlayServerDestroyEntities(previousEntityId));
+            user.sendPacket(new WrapperPlayServerPlayerInfoRemove(List.of(previousProfileId)));
+            sendPlayerInfo(newProfileId, replacementProfileName);
+            sendEntitySpawn(newEntityId, newProfileId, eyePose, movementSpeed);
+            sendCamera(newEntityId);
+        } catch (RuntimeException exception) {
+            // The connection is most likely gone; destroy() still cleans up the new ids.
+            logSendFailure("re-create the fake camera player for a hard cut", exception);
+            return;
+        }
+        // The new entity has received neither a position nor a head-look packet and has no
+        // interpolation state on the client, so the per-entity sync cadence starts over.
+        entitySync.reset();
+        // The client builds the replacement entity without the old one's effects, so
+        // blindness/darkness/night-vision fog would otherwise be lost on every cut.
+        for (Map.Entry<PotionType, EffectSpec> entry : cameraEffects.entrySet()) {
+            try {
+                sendEffect(newEntityId, entry.getKey(), entry.getValue());
+            } catch (RuntimeException exception) {
+                logSendFailure("restore camera effect " + entry.getValue().key(), exception);
+            }
+        }
+    }
+
+    /**
+     * Sends the player-info entry the client needs to construct a RemotePlayer for the
+     * client-only camera entity.
+     */
+    private void sendPlayerInfo(java.util.UUID id, String name) {
+        UserProfile profile = new UserProfile(id, name);
         WrapperPlayServerPlayerInfoUpdate.PlayerInfo info =
                 new WrapperPlayServerPlayerInfoUpdate.PlayerInfo(
                         profile,
@@ -110,31 +197,38 @@ final class PacketCameraView implements CameraOverlay.CameraView {
                 WrapperPlayServerPlayerInfoUpdate.Action.UPDATE_LATENCY,
                 WrapperPlayServerPlayerInfoUpdate.Action.UPDATE_DISPLAY_NAME);
         user.sendPacket(new WrapperPlayServerPlayerInfoUpdate(actions, List.of(info)));
+    }
 
-        double feetY = eyeY() - PLAYER_EYE_HEIGHT;
+    /**
+     * Spawns the client-only PLAYER entity {@code id} for {@code eyePose}. The spectator
+     * camera sits {@link #PLAYER_EYE_HEIGHT} above a player entity, so the eye pose is
+     * converted to feet here. Metadata and the movement-speed attribute follow the spawn:
+     * the invisible flag keeps the entity harmless if a client decides to render it anyway,
+     * and the attribute carries the FOV (slowness/speed are not sent as effects, since the
+     * client does not apply effect modifiers to a client-only entity).
+     */
+    private void sendEntitySpawn(int id, java.util.UUID profile, Pose eyePose, double speed) {
+        double feetY = eyePose.y() - PLAYER_EYE_HEIGHT;
         user.sendPacket(new WrapperPlayServerSpawnEntity(
-                entityId,
-                profileId,
+                id,
+                profile,
                 EntityTypes.PLAYER,
-                new Location(eyeX(), feetY, eyeZ(), eyeYaw(), eyePitch()),
-                eyeYaw(),
+                new Location(eyePose.x(), feetY, eyePose.z(), eyePose.yaw(), eyePose.pitch()),
+                eyePose.yaw(),
                 0,
                 Vector3d.zero()));
         // Spectator players can still see invisible entities, but a camera entity is not
         // rendered when it is the camera. Marking it invisible keeps it harmless if a client
         // version decides to render the camera entity anyway.
-        user.sendPacket(new WrapperPlayServerEntityMetadata(entityId, List.of(
+        user.sendPacket(new WrapperPlayServerEntityMetadata(id, List.of(
                 new EntityData<>(0, EntityDataTypes.BYTE, INVISIBLE_FLAG))));
-        // The client creates RemotePlayer with the vanilla default walking speed (0.1).
-        // Effects such as slowness do not modify a client-only entity's attributes on the
-        // client, so FOV is driven by this explicit attribute update instead.
-        sendMovementSpeed(0.1);
-        // The server is about to send Set Camera(anchor); the listener rewrites it. Sending
-        // the fake target here as well means a late or dropped server packet cannot leave
-        // the client in free spectator mode, and it establishes the target before the first
-        // position sync.
-        user.sendPacket(new WrapperPlayServerCamera(entityId));
-        active.set(true);
+        // A fresh RemotePlayer starts with the vanilla default walking speed; the FOV must
+        // not depend on setMovementSpeed having observed a change.
+        sendMovementSpeed(id, speed);
+    }
+
+    private void sendCamera(int id) {
+        user.sendPacket(new WrapperPlayServerCamera(id));
     }
 
     @Override
@@ -194,12 +288,13 @@ final class PacketCameraView implements CameraOverlay.CameraView {
             return;
         }
         movementSpeed = clamped;
-        sendMovementSpeed(clamped);
+        sendMovementSpeed(entityId, clamped);
     }
 
-    private void sendMovementSpeed(double speed) {
+    /** Sends the FOV-driving movement-speed attribute to the client-only entity {@code id}. */
+    private void sendMovementSpeed(int id, double speed) {
         try {
-            user.sendPacket(new WrapperPlayServerUpdateAttributes(entityId, List.of(
+            user.sendPacket(new WrapperPlayServerUpdateAttributes(id, List.of(
                     new WrapperPlayServerUpdateAttributes.Property(
                             Attributes.MOVEMENT_SPEED, speed, List.of()))));
         } catch (RuntimeException exception) {
@@ -216,10 +311,10 @@ final class PacketCameraView implements CameraOverlay.CameraView {
         if (potion == null) {
             return;
         }
-        int duration = effect.durationTicks() == 0 ? -1 : effect.durationTicks();
+        // Remember the effect so a hard cut can replay it on the replacement entity.
+        cameraEffects.put(potion, effect);
         try {
-            user.sendPacket(new WrapperPlayServerEntityEffect(
-                    entityId, potion, effect.amplifier(), duration, (byte) 0));
+            sendEffect(entityId, potion, effect);
         } catch (RuntimeException exception) {
             logSendFailure("apply camera effect " + effect.key(), exception);
         }
@@ -234,11 +329,21 @@ final class PacketCameraView implements CameraOverlay.CameraView {
         if (potion == null) {
             return;
         }
+        cameraEffects.remove(potion);
         try {
             user.sendPacket(new WrapperPlayServerRemoveEntityEffect(entityId, potion));
         } catch (RuntimeException exception) {
             logSendFailure("remove camera effect " + type.getKey(), exception);
         }
+    }
+
+    /** Sends one camera-visible effect to the client-only entity {@code id}. */
+    private void sendEffect(int id, PotionType potion, EffectSpec effect) {
+        // EffectSpec duration 0 means "until removed or the track ends", which the
+        // entity-effect packet spells as -1 (infinite).
+        int duration = effect.durationTicks() == 0 ? -1 : effect.durationTicks();
+        user.sendPacket(new WrapperPlayServerEntityEffect(
+                id, potion, effect.amplifier(), duration, (byte) 0));
     }
 
     /**
@@ -304,24 +409,12 @@ final class PacketCameraView implements CameraOverlay.CameraView {
                         + "; the armor-stand camera remains authoritative", exception);
     }
 
-    // The spawn packet is built once, from the pose the session attached at.
-    private double eyeX() {
-        return initialPose.x();
-    }
-
-    private double eyeY() {
-        return initialPose.y();
-    }
-
-    private double eyeZ() {
-        return initialPose.z();
-    }
-
-    private float eyeYaw() {
-        return initialPose.yaw();
-    }
-
-    private float eyePitch() {
-        return initialPose.pitch();
+    /**
+     * A fresh name for a client-only camera entity: it only has to look like a player name in
+     * the tab list and stay distinct between the initial spawn and every hard cut.
+     */
+    private static String newProfileName() {
+        return "ZthCam" + String.format(java.util.Locale.ROOT, "%06X",
+                ThreadLocalRandom.current().nextInt(0x1000000));
     }
 }

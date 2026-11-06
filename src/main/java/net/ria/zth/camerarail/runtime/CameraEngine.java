@@ -69,6 +69,19 @@ public final class CameraEngine implements CameraService {
     private static final MiniMessage MINI_MESSAGE = MiniMessage.miniMessage();
     private static final long LOCK_HINT_INTERVAL_TICKS = 80L;
     private static final boolean FOLIA = detectFolia();
+    /**
+     * Ticks to wait after the armor-stand anchor reached the cut pose before re-attaching
+     * the client camera. The client interpolates the anchor over roughly three ticks; the
+     * view already shows the cut pose from the player's body during this window.
+     */
+    private static final int CUT_SWITCH_SETTLE_TICKS = 4;
+    /**
+     * How often a running session re-checks the player's locator-bar modifier. Third-party
+     * plugins may drop modifiers, and {@code /zc reload} may flip
+     * {@code session.hide-locator-bar} while a shot is running; a re-check every second
+     * repairs both without writing the attribute every tick.
+     */
+    private static final int LOCATOR_BAR_SYNC_TICKS = 20;
 
     private final Plugin plugin;
     private final TrackRepository tracks;
@@ -77,6 +90,7 @@ public final class CameraEngine implements CameraService {
     private final Supplier<Messages> messages;
     private final IntSupplier reloadAction;
     private final CameraOverlay overlay;
+    private final LocatorBarHider locatorBarHider;
     private final Map<UUID, Session> sessions = new ConcurrentHashMap<>();
     private final Set<String> fallbackEffectWarnedTracks = ConcurrentHashMap.newKeySet();
 
@@ -96,6 +110,7 @@ public final class CameraEngine implements CameraService {
         this.messages = messages;
         this.reloadAction = reloadAction;
         this.overlay = overlay;
+        this.locatorBarHider = new LocatorBarHider(plugin, plugin.getLogger());
     }
 
     @Override
@@ -248,6 +263,45 @@ public final class CameraEngine implements CameraService {
     @Override
     public int reload() {
         return reloadAction.getAsInt();
+    }
+
+    // ------------------------------------------------------------------ locator bar
+
+    /**
+     * Applies the configured locator-bar state to one player. Called only from the player's
+     * scheduler/region thread.
+     */
+    private void syncLocatorBar(Player player) {
+        locatorBarHider.setHidden(player, config.get().hideLocatorBar());
+    }
+
+    /**
+     * Removes this plugin's locator-bar modifier. Never reads, snapshots or restores the
+     * attribute base value and never touches other plugins' modifiers: if third-party code
+     * changed {@code waypoint_receive_range} while the shot was running, its change stays in
+     * effect after we remove ours. Safe to call on every end/recovery path, when nothing was
+     * hidden, or when the locator-bar attribute is unavailable.
+     */
+    private void restoreLocatorBar(Player player) {
+        locatorBarHider.setHidden(player, false);
+    }
+
+    /**
+     * Re-runs the locator-bar check on the player's scheduler. The camera tick task runs on
+     * the camera entity's scheduler, so this hops back to the player; a retired player
+     * scheduler simply skips the check (the session ends on the next tick).
+     */
+    private void scheduleLocatorBarSync(Session session) {
+        Player player = session.player;
+        boolean scheduled = player.getScheduler().execute(plugin, () -> {
+            if (isCurrent(session) && !session.ending.get() && !session.closed.get() && player.isOnline()) {
+                syncLocatorBar(player);
+            }
+        }, () -> {
+        }, 0L);
+        if (!scheduled && config.get().debug()) {
+            plugin.getLogger().fine("Could not re-check the locator bar for " + player.getName());
+        }
     }
 
     // ------------------------------------------------------------------ lifecycle
@@ -549,6 +603,12 @@ public final class CameraEngine implements CameraService {
 
         session.attached = true;
         session.clientMovedWhileAttached = false;
+        // Hide the vanilla locator bar only once the camera actually owns the player: from
+        // here until release the client sees a cutscene HUD, and the player is already a
+        // spectator (a spectator's waypoint is ignored by other players anyway).
+        if (!session.ending.get()) {
+            syncLocatorBar(player);
+        }
         // Repairing a camera packet the client dropped is not possible through
         // getSpectatorTarget(): the field already points at the camera, and
         // ServerPlayer#setCamera only sends a packet when the target *changes*. Re-send it
@@ -651,6 +711,211 @@ public final class CameraEngine implements CameraService {
         }, delayTicks);
     }
 
+    // ------------------------------------------------------------------ hard cuts
+
+    /**
+     * Applies a hard cut on the fake-player camera by re-creating the client-only camera
+     * entity at the target pose. A camera-target switch is instant on the client, while the
+     * entity was only ever tracked with interpolated positions and a three-tick head-yaw
+     * lerp, so teleporting it would show the cut as a tween.
+     *
+     * @return {@code true} when the fake camera carried the cut; {@code false} when the
+     *         armor-stand switch in {@link #beginCutSwitch} has to do it
+     */
+    private boolean hardCutFakeCamera(Session session, Pose target) {
+        CameraOverlay.CameraView fakeCamera = session.fakeCamera;
+        if (fakeCamera == null || !fakeCamera.active()) {
+            return false;
+        }
+        try {
+            fakeCamera.hardCut(target);
+            if (config.get().debug()) {
+                plugin.getLogger().info("hard cut: re-created the fake camera entity for "
+                        + session.player.getName() + " entityId=" + fakeCamera.entityId()
+                        + " at tick " + session.totalTicks);
+            }
+            return true;
+        } catch (RuntimeException exception) {
+            plugin.getLogger().log(Level.WARNING, "Could not hard-cut the client camera for "
+                    + session.player.getName() + "; continuing with the armor-stand camera",
+                    exception);
+            destroyFakeCamera(session);
+            session.fakeCameraFailureNotified = true;
+            return false;
+        }
+    }
+
+    /**
+     * Armor-stand fallback for a hard cut. The client camera is the stand, and the stand is
+     * moved with the normal entity position sync, which the client interpolates over three
+     * ticks - a teleport would therefore glide. Instead the plugin detaches the camera,
+     * snaps the player's body onto the cut pose (the client camera is the body while it is
+     * detached, so the view already shows the new shot immediately), moves the stand, and
+     * only re-attaches once the client had time to interpolate the stand to its new pose.
+     */
+    private void beginCutSwitch(Session session, Pose target) {
+        session.cutSwitch = -1;
+        if (config.get().debug()) {
+            plugin.getLogger().info("hard cut: detaching the armor-stand camera for "
+                    + session.player.getName() + " at tick " + session.totalTicks);
+        }
+        Player player = session.player;
+        boolean scheduled = player.getScheduler().execute(plugin, () -> detachForCut(session, target),
+                () -> session.cutSwitch = 0, 0L);
+        if (!scheduled) {
+            session.cutSwitch = 0;
+        }
+    }
+
+    /** Player scheduler: drop the camera and put the body (and therefore the view) on the cut pose. */
+    private void detachForCut(Session session, Pose target) {
+        if (!isCurrent(session) || session.ending.get() || session.closed.get() || !session.player.isOnline()) {
+            session.cutSwitch = 0;
+            return;
+        }
+        Player player = session.player;
+        session.internalSpectatorChange = true;
+        try {
+            player.setSpectatorTarget(null);
+        } catch (RuntimeException exception) {
+            // The client may already have dropped the camera; the body snap below still
+            // shows the cut pose.
+            if (config.get().debug()) {
+                plugin.getLogger().log(Level.FINE, "Could not detach the camera for a hard cut", exception);
+            }
+        } finally {
+            session.internalSpectatorChange = false;
+        }
+        Location feet = ExitPlacement.feet(session.world, target, player.getEyeHeight());
+        feet.setYaw(target.yaw());
+        feet.setPitch(target.pitch());
+        beginInternalTeleport(session, 1000L);
+        try {
+            player.teleportAsync(feet, PlayerTeleportEvent.TeleportCause.PLUGIN).whenComplete((success, error) -> {
+                endInternalTeleport(session);
+                if (error != null || !Boolean.TRUE.equals(success)) {
+                    session.cutSwitch = 0;
+                    plugin.getLogger().log(Level.WARNING,
+                            "Could not place the player for a hard cut: " + player.getName(), error);
+                    requestEnd(session, EndReason.ERROR, RestoreMode.ORIGINAL, true, true);
+                    return;
+                }
+                ArmorStand camera = session.camera;
+                if (camera == null) {
+                    session.cutSwitch = 0;
+                    return;
+                }
+                camera.getScheduler().execute(plugin, () -> moveCameraForCut(session, camera, target),
+                        () -> session.cutSwitch = 0, 0L);
+            });
+        } catch (RuntimeException exception) {
+            endInternalTeleport(session);
+            session.cutSwitch = 0;
+            plugin.getLogger().log(Level.WARNING, "Hard-cut body teleport threw for " + player.getName(), exception);
+            requestEnd(session, EndReason.ERROR, RestoreMode.ORIGINAL, true, true);
+        }
+    }
+
+    /** Camera scheduler: move the anchor, then start the settle countdown before re-attaching. */
+    private void moveCameraForCut(Session session, ArmorStand camera, Pose target) {
+        if (!isCurrent(session) || session.ending.get() || session.closed.get()) {
+            session.cutSwitch = 0;
+            return;
+        }
+        Location location = new Location(session.world,
+                target.x(), target.y() - session.cameraEyeOffset, target.z(),
+                target.yaw(), target.pitch());
+        ensureCameraChunk(session, location);
+        try {
+            camera.teleportAsync(location, PlayerTeleportEvent.TeleportCause.PLUGIN)
+                    .whenComplete((success, error) -> camera.getScheduler().execute(plugin, () -> {
+                        if (!isCurrent(session) || session.ending.get() || session.closed.get()) {
+                            session.cutSwitch = 0;
+                            return;
+                        }
+                        if (error != null || !Boolean.TRUE.equals(success)) {
+                            plugin.getLogger().log(Level.WARNING,
+                                    "Could not move the camera for a hard cut: " + session.player.getName(),
+                                    error);
+                            session.cutSwitch = 0;
+                            requestEnd(session, EndReason.CAMERA_LOST, RestoreMode.ORIGINAL, true, true);
+                            return;
+                        }
+                        session.cutSwitch = CUT_SWITCH_SETTLE_TICKS;
+                    }, () -> session.cutSwitch = 0, 0L));
+        } catch (RuntimeException exception) {
+            session.cutSwitch = 0;
+            plugin.getLogger().log(Level.WARNING,
+                    "Camera hard-cut teleport threw for " + session.player.getName(), exception);
+            requestEnd(session, EndReason.CAMERA_LOST, RestoreMode.ORIGINAL, true, true);
+        }
+    }
+
+    /** Camera scheduler: count the settle ticks down, then re-attach on the player scheduler. */
+    private void advanceCutSwitch(Session session) {
+        int phase = session.cutSwitch;
+        if (phase < 0) {
+            // A detach/move/re-attach task is in flight; its callback clears the state.
+            return;
+        }
+        if (phase > 1) {
+            session.cutSwitch = phase - 1;
+            return;
+        }
+        session.cutSwitch = -1;
+        boolean scheduled = session.player.getScheduler().execute(plugin, () -> finishCutSwitch(session),
+                () -> session.cutSwitch = 0, 0L);
+        if (!scheduled) {
+            session.cutSwitch = 0;
+        }
+    }
+
+    /** Player scheduler: lock the camera again once the client has caught up with the anchor. */
+    private void finishCutSwitch(Session session) {
+        session.cutSwitch = 0;
+        if (!isCurrent(session) || session.ending.get() || session.closed.get() || !session.player.isOnline()) {
+            return;
+        }
+        Player player = session.player;
+        ArmorStand camera = session.camera;
+        if (camera == null || !camera.isValid()) {
+            requestEnd(session, EndReason.CAMERA_LOST, RestoreMode.ORIGINAL, true, true);
+            return;
+        }
+        if (!player.getWorld().equals(session.world)) {
+            requestEnd(session, EndReason.WORLD_CHANGE, RestoreMode.NONE, true, true);
+            return;
+        }
+        if (session.fakeCamera == null) {
+            // Fallback camera: the client resolves Set Camera against its own entity list.
+            player.showEntity(plugin, camera);
+        }
+        session.internalSpectatorChange = true;
+        try {
+            player.setSpectatorTarget(camera);
+        } catch (RuntimeException exception) {
+            plugin.getLogger().log(Level.WARNING,
+                    "Could not re-attach the camera after a hard cut for " + player.getName(), exception);
+            requestEnd(session, EndReason.ERROR, RestoreMode.ORIGINAL, true, true);
+            return;
+        } finally {
+            session.internalSpectatorChange = false;
+        }
+        if (player.getSpectatorTarget() != camera) {
+            scheduleCameraResend(session, 1L);
+        }
+        session.clientMovedWhileAttached = false;
+        if (config.get().debug()) {
+            plugin.getLogger().info("hard cut: re-attached the armor-stand camera for "
+                    + player.getName() + " at tick " + session.totalTicks);
+        }
+        // Same idempotent re-send as a fresh attach: the client drops a Set Camera packet it
+        // cannot resolve yet, and the server-side target cannot reveal that.
+        scheduleCameraResend(session, 2L);
+        session.teleportGraceUntilMillis = Math.max(session.teleportGraceUntilMillis,
+                System.currentTimeMillis() + 500L);
+    }
+
     private void applyEntryEffects(Session session) {
         if (session.track.entryEffects().isEmpty() || !session.appliesEntryEffects()) {
             return;
@@ -681,6 +946,9 @@ public final class CameraEngine implements CameraService {
         }
         RailConfig currentConfig = config.get();
         session.totalTicks++;
+        if (session.totalTicks % LOCATOR_BAR_SYNC_TICKS == 0) {
+            scheduleLocatorBarSync(session);
+        }
         if (session.totalTicks > currentConfig.maxTrackTicks()) {
             requestEnd(session, EndReason.LIMIT, RestoreMode.ORIGINAL, true, true);
             return;
@@ -690,6 +958,14 @@ public final class CameraEngine implements CameraService {
         // until they complete so that a final effect cannot be lost during cleanup.
         if (session.pendingInstant) {
             updateCamera(session);
+            return;
+        }
+
+        // A hard cut on the armor-stand camera has to detach the client camera for a few
+        // ticks (see beginCutSwitch); step processing pauses until it is re-attached.
+        if (session.cutSwitch != 0) {
+            updateCamera(session);
+            advanceCutSwitch(session);
             return;
         }
 
@@ -754,16 +1030,26 @@ public final class CameraEngine implements CameraService {
                 return;
             }
             if (step instanceof CutStep cutStep) {
+                Pose cutTarget = cutStep.to();
+                if (session.cutStepApplied != session.stepIndex) {
+                    session.enterStep(step);
+                    session.currentPose = cutTarget;
+                    session.cutStepApplied = session.stepIndex;
+                    if (!hardCutFakeCamera(session, cutTarget)) {
+                        // The armor-stand camera is what the client renders, so the jump
+                        // has to go through a short detach: the client cannot interpolate a
+                        // camera target it no longer looks through.
+                        beginCutSwitch(session, cutTarget);
+                        return;
+                    }
+                }
                 // The jump itself has no transition. A positive duration then holds the new
                 // pose (sway included) for that many ticks; duration 0 stays a pure cut that
                 // occupies no ticks, so the following step starts on this very tick.
-                if (session.stepTicks == 0) {
-                    session.enterStep(step);
-                    session.currentPose = cutStep.to();
-                    if (cutStep.durationTicks() == 0) {
-                        session.stepIndex++;
-                        continue;
-                    }
+                if (cutStep.durationTicks() == 0) {
+                    session.stepIndex++;
+                    session.stepTicks = 0;
+                    continue;
                 }
                 session.stepTicks++;
                 updateCamera(session);
@@ -1047,6 +1333,14 @@ public final class CameraEngine implements CameraService {
         if (!session.track.follow() || !config.get().followCamera()) {
             return;
         }
+        if (session.cutSwitch != 0) {
+            // The body was deliberately placed on the cut pose: while the camera is
+            // detached the client camera IS the body, so following the anchor now would
+            // move the view off the cut pose and make the re-attach jump. The first normal
+            // tick follows again; by then the client looks through the camera and cannot
+            // see the body move.
+            return;
+        }
         int chunkX = cameraLocation.getBlockX() >> 4;
         int chunkZ = cameraLocation.getBlockZ() >> 4;
         long packed = ((long) chunkX << 32) ^ (chunkZ & 0xFFFFFFFFL);
@@ -1108,6 +1402,7 @@ public final class CameraEngine implements CameraService {
                                 return;
                             }
                             if (isCurrent(session) && !session.ending.get() && session.camera != null
+                                    && session.cutSwitch == 0
                                     && player.getSpectatorTarget() != session.camera) {
                                 try {
                                     player.setSpectatorTarget(session.camera);
@@ -1399,6 +1694,9 @@ public final class CameraEngine implements CameraService {
             // blindness/darkness effect on the player. Effect cleanup is independent of the
             // camera restore and is cheap, so always run it.
             restoreEffects(session, session.totalTicks);
+            // Same for the locator-bar modifier: unconditionally drop our own transient
+            // modifier, including the original == null early return above and all throw paths.
+            restoreLocatorBar(player);
         }
     }
 
@@ -1723,6 +2021,8 @@ public final class CameraEngine implements CameraService {
             plugin.getLogger().log(Level.WARNING, "Could not restore camera state on quit for " + player.getName(),
                     exception);
         }
+        // Covers a session whose snapshot was missing; normal restores already did this.
+        restoreLocatorBar(player);
         sessions.remove(player.getUniqueId(), session);
         removeCamera(session);
         // Keep the recovery file even after restoring the game mode: the player's logout
@@ -1772,8 +2072,10 @@ public final class CameraEngine implements CameraService {
      */
     public void handleClientMove(Player player) {
         Session session = sessions.get(player.getUniqueId());
-        // Ignore the packets that were already in flight while the camera was being attached.
-        if (session != null && session.attached && !session.ending.get() && session.totalTicks >= 15) {
+        // Ignore the packets that were already in flight while the camera was being attached,
+        // and those sent while a hard cut has the camera detached on purpose.
+        if (session != null && session.attached && !session.ending.get()
+                && session.totalTicks >= 15 && session.cutSwitch == 0) {
             session.clientMovedWhileAttached = true;
         }
     }
@@ -1869,7 +2171,9 @@ public final class CameraEngine implements CameraService {
 
     public void reassertSpectator(Player player) {
         Session session = sessions.get(player.getUniqueId());
-        if (session == null || session.ending.get() || session.camera == null) {
+        if (session == null || session.ending.get() || session.camera == null || session.cutSwitch != 0) {
+            // Re-attaching in the middle of a hard-cut switch would re-introduce the
+            // interpolation the switch exists to avoid; finishCutSwitch locks it again.
             return;
         }
         if (player.getGameMode() == GameMode.SPECTATOR && player.getSpectatorTarget() != session.camera) {
@@ -1901,7 +2205,19 @@ public final class CameraEngine implements CameraService {
     // ------------------------------------------------------------------ recovery/shutdown
 
     public void recoverOnJoin(Player player) {
-        if (!recovery.enabled() || sessions.containsKey(player.getUniqueId())) {
+        if (sessions.containsKey(player.getUniqueId())) {
+            return;
+        }
+        // A plugin reload keeps player entities (and their attributes) alive but drops this
+        // plugin's in-memory bookkeeping. Clear a stale modifier even when recovery is off;
+        // transient modifiers do not survive a real relog, so this is normally a no-op.
+        player.getScheduler().execute(plugin, () -> {
+            if (player.isOnline() && !sessions.containsKey(player.getUniqueId())) {
+                restoreLocatorBar(player);
+            }
+        }, () -> {
+        }, 0L);
+        if (!recovery.enabled()) {
             return;
         }
         recovery.read(player.getUniqueId()).thenAccept(optional -> optional.ifPresent(recoveryData -> {
@@ -1917,6 +2233,9 @@ public final class CameraEngine implements CameraService {
         if (!player.isOnline() || sessions.containsKey(player.getUniqueId())) {
             return;
         }
+        // Idempotent cleanup for a plugin reload that left our transient modifier on a live
+        // player; the player may also have set the attribute deliberately, which we never undo.
+        restoreLocatorBar(player);
         World world = Bukkit.getWorld(data.worldName());
         if (world == null) {
             // Do not touch effects/game mode and do not delete the file: the world may be
@@ -2003,6 +2322,9 @@ public final class CameraEngine implements CameraService {
                     plugin.getLogger().log(Level.WARNING, "Could not restore camera on shutdown for "
                             + player.getName(), exception);
                 }
+                // On Paper (non-Folia) the shutdown runs on the main thread, so the attribute
+                // may be touched directly even if the session had no snapshot to restore.
+                restoreLocatorBar(player);
             } else if (player.isOnline()) {
                 // On Folia this runs on the player's current region when possible.
                 player.getScheduler().execute(plugin, () -> {
@@ -2014,6 +2336,7 @@ public final class CameraEngine implements CameraService {
                         plugin.getLogger().log(Level.WARNING, "Could not restore camera on shutdown for "
                                 + player.getName(), exception);
                     }
+                    restoreLocatorBar(player);
                 }, () -> {
                 }, 0L);
             }

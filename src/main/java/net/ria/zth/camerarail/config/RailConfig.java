@@ -17,6 +17,7 @@ public record RailConfig(
         boolean followCamera,
         int defaultWaitTimeoutTicks,
         boolean allowSneakExit,
+        boolean hideLocatorBar,
         boolean recoveryEnabled,
         long recoveryMaxAgeMillis,
         int maxSteps,
@@ -36,6 +37,7 @@ public record RailConfig(
         boolean followCamera = config.getBoolean("session.follow-camera", true);
         int waitTimeout = intValue(config, "session.wait-timeout", 6000, 0, Integer.MAX_VALUE, logger);
         boolean allowSneakExit = config.getBoolean("session.allow-sneak-exit", false);
+        boolean hideLocatorBar = config.getBoolean("session.hide-locator-bar", true);
         boolean recovery = config.getBoolean("session.recovery", true);
         long recoveryHours = longValue(config, "session.recovery-max-age-hours", 168L, 1L, 24L * 365L, logger);
 
@@ -52,6 +54,7 @@ public record RailConfig(
                 followCamera,
                 waitTimeout,
                 allowSneakExit,
+                hideLocatorBar,
                 recovery,
                 recoveryHours * 60L * 60L * 1000L,
                 maxSteps,

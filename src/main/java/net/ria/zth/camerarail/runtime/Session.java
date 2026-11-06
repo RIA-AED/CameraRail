@@ -87,6 +87,16 @@ final class Session {
     volatile Pose stepFrom;
     volatile PathCurve pathCurve;
     volatile int pathCurveStep = -1;
+    /**
+     * Step index whose hard-cut jump has already been applied. The cut is processed again
+     * on later ticks (hold after the jump, armor-stand switch), so the jump must not repeat.
+     */
+    volatile int cutStepApplied = -1;
+    /**
+     * Armor-stand fallback hard-cut switch state: {@code 0} = idle, positive = settle ticks
+     * left before the client camera may be re-attached, negative = a switch task is in flight.
+     */
+    volatile int cutSwitch;
     volatile String activeStepDescription = "准备中";
     volatile String activeSway = "inherit";
     volatile int stepIndex;

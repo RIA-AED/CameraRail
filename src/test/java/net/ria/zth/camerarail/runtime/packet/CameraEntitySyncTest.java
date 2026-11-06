@@ -80,6 +80,33 @@ class CameraEntitySyncTest {
     }
 
     @Test
+    void resetRestartsPositionAndHeadSync() {
+        CameraEntitySync sync = new CameraEntitySync();
+        CameraEntitySync.SyncPlan first = sync.tick(10.0f);
+        assertTrue(first.sendPosition(), "the first tick sends the position");
+        // The second tick is not on the three-tick position cadence, and 10.5 degrees packs
+        // to the same byte as 10.0, so the next tick would send neither packet.
+        CameraEntitySync.SyncPlan beforeReset = sync.tick(10.5f);
+        assertFalse(beforeReset.sendPosition(), "the second tick is not a position tick");
+        assertFalse(beforeReset.sendHeadLook(), "the packed head yaw did not change");
+
+        sync.reset();
+        CameraEntitySync.SyncPlan afterReset = sync.tick(10.5f);
+        assertTrue(afterReset.sendPosition(), "reset() must restart the position cadence");
+        assertTrue(afterReset.sendHeadLook(), "reset() must restart the head-look sync");
+        assertEquals(10.5f, afterReset.headYaw(), "the first packet after reset carries this tick's yaw");
+        assertEquals((byte) 7, afterReset.packedHeadYaw());
+
+        // The cadence then continues as if the entity were new: skip, skip, send.
+        CameraEntitySync.SyncPlan skipped = sync.tick(10.5f);
+        assertFalse(skipped.sendPosition(), "tick 1 after reset skips the position");
+        assertFalse(skipped.sendHeadLook(), "an unchanged packed head yaw is not re-sent");
+        CameraEntitySync.SyncPlan skippedAgain = sync.tick(10.5f);
+        assertFalse(skippedAgain.sendPosition(), "tick 2 after reset skips the position");
+        assertTrue(sync.tick(10.5f).sendPosition(), "tick 3 after reset sends the position again");
+    }
+
+    @Test
     void quantizedBoundaryYawsMatchThePacketEventsWriter() {
         // (byte)((int)(yaw * 0.7111111f)), the expression PacketEvents' head-look writer
         // uses: -180 and 180 both wrap to Byte.MIN_VALUE, which decodes to -180 degrees.
