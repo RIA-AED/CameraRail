@@ -98,7 +98,7 @@ sway:
 
 ### entry-effects
 
-在保存恢复文件后、第一次硬切到镜头起点之前施加，适合用 `darkness` 做部分压暗：
+在保存恢复文件后、第一次硬切到镜头起点之前施加，适合用 `darkness`/`blindness` 压暗，或在推镜时用 `slowness` 收窄 FOV：
 
 ```yaml
 entry-effects:
@@ -108,7 +108,9 @@ entry-effects:
 
 只支持添加，不支持 `action`。字段与 `effect` 步骤相同。正常结束或中止时，插件会恢复进入前的原效果。
 
-> 附身盔甲架时，`blindness` 不会产生画面（客户端读镜头实体的效果，盔甲架的效果不会同步给旁观者）；详见 [spectator-effects.md](spectator-effects.md)。
+入场效果只绑定“从轨道起点进入镜头”这一次硬切：真实播放和从轨道起点开始的预览（“预览全部”、预览第一个步骤）会施加；从中间步骤开始的预览（含“预览此步”）不会施加，避免编辑时被失明/黑暗等效果遮住画面。
+
+> 安装并启用 PacketEvents 假玩家镜头时，`blindness`/`darkness`/`night_vision` 的雾与天空、`slowness`/`speed` 的 FOV 都会生效。没有 PacketEvents 或假玩家创建失败时，效果回退到盔甲架镜头：`nausea` 完整、`darkness` 部分、`night_vision` 大部分，`blindness`/`slowness` 没有画面。详见 [spectator-effects.md](spectator-effects.md)。
 
 ## 步骤
 
@@ -184,7 +186,9 @@ entry-effects:
 
 常见效果名：`nausea`、`darkness`、`night_vision`、`blindness`、`slowness`/`slow`、`speed`、`invisibility`、`glowing`、`slow_falling`、`levitation`、`regeneration`、`resistance`、`fire_resistance`、`water_breathing`、`conduit_power`、`dolphins_grace`、`bad_omen`、`hero_of_the_village`。也接受带命名空间的注册 id，如 `minecraft:slowness`。
 
-> 附身盔甲架时，只有 `nausea` 完整生效、`darkness` 部分生效（世界变暗/脉动，天空和雾不变）、`night_vision` 大部分生效（亮度提升，雾色不变）。`blindness`、`slowness`/`speed` 等没有画面效果；FOV 与失明雾读的是镜头实体，而盔甲架不是玩家，且它的效果不会同步给客户端。详见 [spectator-effects.md](spectator-effects.md)。
+`effect` 是瞬时步骤：`duration` 只决定效果在玩家/假玩家身上的持续时间，**不占用轨道时间轴，也不会等待效果结束**。60t 的效果会在后续动画继续播放时同时持续 60t；要提前结束就再加一个 `action: remove` 步骤。
+
+> 假玩家镜头（PacketEvents）下，`blindness`/`darkness`/`night_vision` 的雾和天空、`slowness`/`speed` 的 FOV 都可用；`nausea` 与亮度图仍来自真实玩家。FOV 不是靠效果包，而是插件按等级计算并直接下发假玩家的 `MOVEMENT_SPEED` 属性（客户端不会给客户端侧实体应用药水属性修正）。没有 PacketEvents 或假玩家创建失败时，回退到盔甲架镜头：只有 `nausea` 完整、`darkness` 部分、`night_vision` 大部分生效，`blindness`/`slowness` 没有画面。具体倍率见 [spectator-effects.md](spectator-effects.md)。
 
 所有插件施加的效果都隐藏粒子和 HUD 图标。
 

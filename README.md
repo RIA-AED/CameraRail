@@ -1,6 +1,6 @@
 # ZthCameraRail
 
-ZthCameraRail 是一个用于 Paper / Folia 的 Minecraft 摄像机轨道插件。播放时，玩家会被切换为旁观者并附身到一个隐藏的盔甲架上，镜头按 `tracks.yml` 中定义的路径移动、停留或等待外部信号；播放结束后，玩家按配置的落点返回。
+ZthCameraRail 是一个用于 Paper / Folia 的 Minecraft 摄像机轨道插件。播放时，玩家会被切换为旁观者，服务端用一个隐藏的盔甲架作为相机锚点；安装 PacketEvents 后，客户端还会通过一个只存在于该客户端的假玩家实体渲染镜头，从而获得真正的 FOV 与更完整的药水效果。镜头按 `tracks.yml` 中定义的路径移动、停留或等待外部信号；播放结束后，玩家按配置的落点返回。
 
 插件只负责镜头本身。登录验证、小游戏流程、正式传送和流程状态切换由其他插件负责，它们可以通过 `CameraService`、事件或 `/zc` 命令与镜头播放配合。
 
@@ -14,7 +14,7 @@ ZthCameraRail 是一个用于 Paper / Folia 的 Minecraft 摄像机轨道插件�
 - 基于 Paper Dialog 的图形编辑器与命令编辑器，修改即时保存，支持撤销
 - 玩家退出或服务器崩溃后，下次登录恢复播放前的状态
 - Paper / Folia 双端支持
-- 无第三方依赖，不需要 ProtocolLib 等前置
+- 可选 PacketEvents 假玩家镜头：FOV、失明雾/压天、夜视雾等按镜头实体读取的效果可用；不 shade PacketEvents，未安装时自动回退到盔甲架镜头
 
 ## 环境要求
 
@@ -24,18 +24,28 @@ ZthCameraRail 是一个用于 Paper / Folia 的 Minecraft 摄像机轨道插件�
 | Java | 25 |
 | Minecraft | 26.1.2 |
 | 客户端 | 原版 Java 版客户端，需正确处理 `Set Camera` 包 |
+| PacketEvents | 可选，推荐 2.14.0+；用于假玩家镜头，不 shade |
 
-插件已在 Paper 26.1.2-74 和 Folia 26.1.2 上完成镜头播放、信号推进和退出落点的实机测试。
+插件已在 Paper 26.1.2-74 上完成基础镜头播放、信号推进和退出落点的实机测试。假玩家镜头依赖 PacketEvents 2.14.0，并已在 Paper 启动时确认注册成功；客户端画面（FOV、失明雾）的最终效果仍建议按 [docs/testing.md](docs/testing.md) 在目标客户端版本上验收。未安装 PacketEvents 或假玩家创建失败时，插件会记录日志并回退到盔甲架镜头，不会阻止播放。
 
 ## 安装
 
-1. 构建或下载 `ZthCameraRail.jar`。
-2. 将 jar 放入服务端 `plugins/` 目录。
+1. 将 PacketEvents 2.14.0+ 的插件 jar 放入服务端 `plugins/` 目录（可选，但 FOV/失明雾需要它）。
+2. 构建或下载 `ZthCameraRail.jar`，放入同一 `plugins/` 目录。
 3. 启动服务器，插件会生成默认配置。
 4. 编辑 `plugins/ZthCameraRail/tracks.yml`，或进入游戏执行 `/zc edit`。
 5. 执行 `/zc reload`，然后 `/zc play <轨道>` 预览。
 
 首次启动会生成配置和轨道文件；`recovery/` 在第一次播放时创建。
+
+没有安装 PacketEvents 时不会阻止插件运行，但会明确提示：
+
+- 启动日志为 WARN：`PacketEvents not installed; fake-player camera disabled...`；
+- 播放使用 `blindness`/`slowness`/`speed` 等镜头相关效果的轨道时，聊天栏提示当前是盔甲架回退模式，控制台只对每条轨道警告一次；
+- 编辑器轨道概览显示“镜头模式: 盔甲架回退 · FOV/失明雾不可用”；
+- `/zc info <轨道>` 显示“镜头模式: 假玩家 (PacketEvents)”或“镜头模式: 盔甲架回退”；
+- 效果选择器摘要与效果表单显示回退说明；
+- `/zc edit effect add ...` 追加镜头相关效果后，聊天栏追加同样的提示。
 
 ```text
 plugins/ZthCameraRail/
@@ -275,11 +285,15 @@ int reload();
 
 ## 实现说明
 
-- 镜头实体是一个隐藏的普通（非 marker）盔甲架，玩家以旁观者身份附身到它；服务端每 tick 更新实体姿态，客户端负责帧间插值，不会每 tick 传送玩家本体。
-- 附身前先对玩家调用 `showEntity`，再设置旁观目标；第 2、10 tick 会重发一次 `Set Camera`，第 45 tick 检查客户端是否仍在发送自身移动包，未锁定时在控制台输出警告。
+- 服务端锚点是一个隐藏的普通（非 marker）盔甲架，玩家以旁观者身份附身到它；服务端每 tick 更新实体姿态，客户端负责帧间插值，不会每 tick 传送玩家本体。
+- 安装 PacketEvents 时，插件还会生成一个只存在于该客户端的 PLAYER 实体，并把发往盔甲架的 `Set Camera` 包改写成假玩家 id。服务端 `getSpectatorTarget()` 仍是盔甲架，区块票据、每 tick 吸附和跨区块跟随都不变；假玩家负责客户端的 Camera、FOV 和按镜头实体读取的效果。客户端旁观相机的视角取的是实体的 head yaw，而位置包只同步身体朝向，所以插件还要在量化后的 head yaw 变化时逐 tick 下发 `EntityHeadLook`（假玩家没有服务端实体，原版实体跟踪不会替它发这个包）；否则画面 yaw 会停在进入镜头时的角度。
+- 假玩家的位置、pitch 和身体朝向每 3 tick 从同一份镜头姿态同步一次（与精确实体跟踪的节奏一致）；视角 yaw 的 head 同步则是每个镜头 tick 检查、量化值变化才发包。插件直接计算并下发假玩家的 `MOVEMENT_SPEED` 属性：客户端不会给客户端侧实体应用药水效果的属性修正，所以 `slowness`/`speed` 的 FOV 必须走属性包。PacketEvents 不可用或假玩家生成失败时，自动保持原盔甲架镜头。
+- 假玩家镜头激活时**不会**向该客户端发送盔甲架实体：盔甲架只作为服务端 spectator target 存在。只有假玩家不可用、回退到盔甲架镜头时才对玩家调用 `showEntity`。旁观者客户端能看见 invisible 实体，若把盔甲架发给客户端，会在镜头位置出现半透明模型。
+- 第 2、10 tick 会重发一次 `Set Camera`，第 45 tick 检查客户端是否仍在发送自身移动包，未锁定时在控制台输出警告。
 - 镜头跨区块时，玩家实体跟随移动以保证区块加载；可以用轨道字段 `follow: false` 或 `session.follow-camera: false` 关闭。
-- 镜头实体使用服务端的精确位置同步模式（通过反射设置 `requiresPrecisePosition`），避免慢速旋转被量化成约 1.4° 的台阶；字段不可用时自动退回默认的实体跟踪。
-- 退出时先把玩家身体传送到落点，等待 1 tick 再解除旁观并恢复游戏模式、飞行状态和药水效果，避免客户端先回到旧身体位置造成接缝。
+- 服务端镜头实体（含回退模式的盔甲架）使用精确位置同步模式（通过反射设置 `requiresPrecisePosition`），让位置、pitch 和身体朝向走 float 的 `EntityPositionSync`；但客户端旁观相机的视角 yaw 来自 head yaw，协议只提供 1 字节（1/256 圈 = 1.40625°）的 `RotateHead` 包并由客户端做 3 tick 插值，所以慢速旋转仍可能出现亚度级台阶与约 2–3 tick 的跟随滞后——这与旁观原版玩家一致，不是本插件能消除的量化。字段不可用时自动退回默认的实体跟踪。
+- 退出时先解除旁观/相机并恢复游戏模式、飞行状态和药水效果，清空残余速度后再把玩家传送到落点，并在 1 tick 后对同一落点再重同步一次传送：这样既避免客户端在相机锁定期间收到传送造成的位置确认相位错乱，也保证落点脚底位于方块表面之上（`ExitPlacement` 会抬升 0.1 mm 并在脚底嵌入方块碰撞体时抬到碰撞体顶，因为 `pose.y - eyeHeight` 的 float 误差会让脚底低约 4.8e-9，GUI 取景的 6 位小数取整、潜行/游泳取景与站立恢复的眼高差也可能让脚底嵌进方块）。编辑器的“传送到此”使用同一套落点校正与重同步。
+- 退出与编辑器“传送到此”都会对同一落点发送两次传送（间隔约 1 tick）来重置客户端的传送确认状态；监听 `PlayerTeleportEvent` 的其他插件会看到两次 `PLUGIN` 传送。
 
 ### Folia
 
@@ -291,11 +305,14 @@ int reload();
 
 ## 已知限制
 
-- 附身盔甲架时，只有少数药水效果有画面：`nausea` 完整生效，`darkness` 部分生效，`night_vision` 大部分生效；`blindness`、`slowness` 等没有画面效果。详见 [docs/spectator-effects.md](docs/spectator-effects.md)。
+- 假玩家镜头下，`blindness` 的雾/压天、`darkness`/`night_vision` 的雾也会生效，`slowness`/`speed` 会改变 FOV；`nausea`、亮度图等仍按真实玩家读取。未安装 PacketEvents 或假玩家创建失败时，效果退回旧行为（仅 `nausea` 完整、`darkness` 部分、`night_vision` 大部分）。详见 [docs/spectator-effects.md](docs/spectator-effects.md)。
+- 假玩家镜头不是完整客户端渲染：全屏渐变/黑场、水下/着火/方块贴脸等 `ScreenEffectRenderer` 叠加层仍不可用，FOV 也只能通过药水等级（`slowness`/`speed`）表达。
+- 假玩家是客户端侧实体，跨版本链路（ViaVersion/ViaBackwards）是否完整转发它的 PlayerInfo、属性和效果包取决于链路；建议在目标 26.1.2 原生客户端上验收 FOV 和画面效果。若链路不转发属性包，FOV 会保持 1.0，但镜头与其余效果不受影响。
+- 假玩家镜头的视角 yaw 通过原版 head-yaw 包同步：协议精度为 1/256 圈（约 1.40625°），客户端还会做 3 tick 插值。因此极慢的缓动平移可能有亚度级台阶或约 2–3 tick 的跟随滞后，快速转身约 150 ms 后到位；位置与 pitch 不受影响。这与盔甲架回退模式、旁观原版玩家时一致。
 - 自定义 `sway` 的 `yaw` 在部分客户端可能出现短促的水平回抽；预设档位 `yaw` 为 `0`，默认不会触发。
 - 一条轨道只能属于一个世界。
 - 编辑器保存会重写整个 `tracks.yml`，只保留文件头注释。文件中存在无法解析的轨道时，编辑器会拒绝保存，需要先修复并执行 `/zc reload`。
-- 从选中步骤开始预览时，不会回放之前的 `effect` 和 `title` 步骤。
+- 从选中步骤开始预览时，不会回放之前的 `effect` 和 `title` 步骤，也不会施加入场效果；从轨道起点开始的预览与真实播放一致，会施加入场效果。
 - 不支持循环轨道、多轨道叠加或任意命令步骤；流程编排交给其他插件。
 - 镜头锁定依赖客户端正确处理 `Set Camera` 包，少数第三方客户端或协议转换链路可能无法锁定旁观相机。
 - 精确同步依赖服务端映射字段；服务端改名时会自动退回默认的量化跟踪，播放仍可继续。
@@ -315,7 +332,7 @@ mvn package
 
 - [tracks.yml 字段参考](docs/yaml-reference.md)
 - [插件集成与事件](docs/integration.md)
-- [旁观者附身下的药水效果](docs/spectator-effects.md)
+- [旁观者镜头下的药水效果与假玩家摄像机](docs/spectator-effects.md)
 - [本地验证与测试清单](docs/testing.md)
 
 ## 许可

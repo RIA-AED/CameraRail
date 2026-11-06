@@ -7,10 +7,11 @@ import org.bukkit.potion.PotionEffectType;
  * A single potion-effect operation. {@code durationTicks == 0} means "until removed or the
  * track ends". Amplifier is zero-based, matching Bukkit.
  *
- * <p>Effects are applied to the spectating player, never to the camera armor stand. In the
- * attached-camera mode the client reads only some effects from the player and the rest from
- * the camera entity, so effects such as blindness or slowness do not produce a picture while
- * attached; see {@code docs/spectator-effects.md}.
+ * <p>Effects are applied to the spectating player, never to the camera armor stand. When the
+ * PacketEvents fake-player camera is active, the camera-visible subset is also sent to that
+ * client-only player entity, which makes blindness/darkness fog and slowness/speed FOV work;
+ * the player copy still drives nausea, the lightmap and the HUD state. See
+ * {@code docs/spectator-effects.md}.
  */
 public record EffectSpec(
         PotionEffectType type,

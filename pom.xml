@@ -14,6 +14,7 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <maven.compiler.release>25</maven.compiler.release>
         <paper.version>26.1.2.build.74-stable</paper.version>
+        <packetevents.version>2.14.0</packetevents.version>
         <junit.version>5.11.4</junit.version>
     </properties>
 
@@ -21,6 +22,10 @@
         <repository>
             <id>papermc-repo</id>
             <url>https://repo.papermc.io/repository/maven-public/</url>
+        </repository>
+        <repository>
+            <id>codemc-releases</id>
+            <url>https://repo.codemc.io/repository/maven-releases/</url>
         </repository>
         <repository>
             <id>central</id>
@@ -33,6 +38,17 @@
             <groupId>io.papermc.paper</groupId>
             <artifactId>paper-api</artifactId>
             <version>${paper.version}</version>
+            <scope>provided</scope>
+        </dependency>
+        <!--
+          PacketEvents is a server-side plugin, not a shaded library. Keeping it
+          provided means the released jar contains no PacketEvents classes and
+          loads the API from the packetevents plugin at runtime.
+        -->
+        <dependency>
+            <groupId>com.github.retrooper</groupId>
+            <artifactId>packetevents-spigot</artifactId>
+            <version>${packetevents.version}</version>
             <scope>provided</scope>
         </dependency>
         <dependency>

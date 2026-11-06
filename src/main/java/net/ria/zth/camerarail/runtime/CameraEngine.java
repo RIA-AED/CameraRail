@@ -12,6 +12,7 @@ import net.ria.zth.camerarail.api.PlaybackInfo;
 import net.ria.zth.camerarail.config.RailConfig;
 import net.ria.zth.camerarail.config.TrackRepository;
 import net.ria.zth.camerarail.message.Messages;
+import net.ria.zth.camerarail.model.CameraEffects;
 import net.ria.zth.camerarail.model.CameraStep;
 import net.ria.zth.camerarail.model.CameraTrack;
 import net.ria.zth.camerarail.model.CutStep;
@@ -41,6 +42,7 @@ import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
+import org.bukkit.util.Vector;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -74,7 +76,9 @@ public final class CameraEngine implements CameraService {
     private final Supplier<RailConfig> config;
     private final Supplier<Messages> messages;
     private final IntSupplier reloadAction;
+    private final CameraOverlay overlay;
     private final Map<UUID, Session> sessions = new ConcurrentHashMap<>();
+    private final Set<String> fallbackEffectWarnedTracks = ConcurrentHashMap.newKeySet();
 
     public CameraEngine(
             Plugin plugin,
@@ -82,7 +86,8 @@ public final class CameraEngine implements CameraService {
             RecoveryStore recovery,
             Supplier<RailConfig> config,
             Supplier<Messages> messages,
-            IntSupplier reloadAction
+            IntSupplier reloadAction,
+            CameraOverlay overlay
     ) {
         this.plugin = plugin;
         this.tracks = tracks;
@@ -90,6 +95,7 @@ public final class CameraEngine implements CameraService {
         this.config = config;
         this.messages = messages;
         this.reloadAction = reloadAction;
+        this.overlay = overlay;
     }
 
     @Override
@@ -176,6 +182,7 @@ public final class CameraEngine implements CameraService {
         if (existing != null) {
             return false;
         }
+        warnFallbackEffects(player, track);
         boolean scheduled = player.getScheduler().execute(plugin,
                 () -> begin(session),
                 () -> abandon(session),
@@ -185,6 +192,26 @@ public final class CameraEngine implements CameraService {
             return false;
         }
         return true;
+    }
+
+    /**
+     * Whether the PacketEvents fake-player camera is currently usable. The editor uses this
+     * to avoid promising FOV/blindness effects in fallback mode.
+     */
+    public boolean fakeCameraAvailable() {
+        return overlay != null && overlay.available();
+    }
+
+    private void warnFallbackEffects(Player player, CameraTrack track) {
+        if (fakeCameraAvailable() || !CameraEffects.usesCameraDependentEffects(track)) {
+            return;
+        }
+        messages.get().send(player, "camera.fake-camera-unavailable");
+        if (fallbackEffectWarnedTracks.add(track.id())) {
+            plugin.getLogger().warning("Track " + track.id() + " uses camera-dependent effects but"
+                    + " PacketEvents is unavailable; using the armor-stand fallback (FOV, blindness"
+                    + " and slowness/speed effects will not render).");
+        }
     }
 
     @Override
@@ -329,14 +356,11 @@ public final class CameraEngine implements CameraService {
                 stand.setSilent(true);
                 stand.setCollidable(false);
                 stand.setPersistent(false);
-                // Hidden from every player by default; attach() shows it to exactly one
-                // player with Player#showEntity. That call pushes the spawn packet to the
-                // client *now*, and the order matters: the client silently drops a Set
-                // Camera packet for an entity it does not know yet (it only resolves the id
-                // in its own level) and never asks for it again. A visible-by-default stand
-                // is spawned by the entity tracker on the tracker's own schedule, so the
-                // camera packet can overtake it, leaving the client in free spectator mode
-                // while the server keeps snapping the player to the stand every tick.
+                // Hidden from every player by default. The fake-player path never shows it
+                // to the spectator: spectators can see invisible entities, so an armor stand
+                // sent to the client would appear as a translucent model at the camera. Only
+                // the armor-stand fallback calls Player#showEntity; there the spawn must be on
+                // the wire before Set Camera, otherwise the client drops the camera packet.
                 // setVisible(false) already hides the stand's model.
                 stand.setVisibleByDefault(false);
                 stand.setCustomNameVisible(false);
@@ -450,10 +474,63 @@ public final class CameraEngine implements CameraService {
             // takes control of it again (a camera packet the client did not honour).
             player.setAllowFlight(true);
             player.setFlying(true);
-            // The client resolves Set Camera against its own entity list, so the spawn has to
-            // be on the wire first. showEntity pushes it to this player immediately; the
-            // stand is hidden from everybody by default, so nobody else ever receives it.
-            player.showEntity(plugin, camera);
+            CameraOverlay.CameraView fakeCamera = session.fakeCamera;
+            if (fakeCamera != null && !fakeCamera.active()) {
+                fakeCamera.destroy();
+                session.fakeCamera = null;
+                fakeCamera = null;
+            }
+            if (fakeCamera == null && overlay != null && overlay.available()) {
+                try {
+                    fakeCamera = overlay.create(player, camera, session.initialPose);
+                } catch (RuntimeException exception) {
+                    plugin.getLogger().log(Level.WARNING,
+                            "Could not create the client-side camera player for " + player.getName()
+                                    + "; using the armor-stand camera", exception);
+                    fakeCamera = null;
+                }
+                if (fakeCamera == null) {
+                    if (!session.fakeCameraFailureNotified && overlay != null && overlay.available()) {
+                        session.fakeCameraFailureNotified = true;
+                        messages.get().send(player, "camera.fake-camera-failed");
+                    }
+                    if (config.get().debug()) {
+                        plugin.getLogger().info("Client-side camera unavailable for " + player.getName()
+                                + "; continuing with the armor-stand camera");
+                    }
+                } else {
+                    session.fakeCamera = fakeCamera;
+                    if (config.get().debug()) {
+                        plugin.getLogger().info("Fake camera created for " + player.getName()
+                                + " entityId=" + fakeCamera.entityId());
+                    }
+                    // Entry effects are applied before the camera entity exists. Replay them
+                    // once the fake player has been spawned so blindness/FOV cover the cut.
+                    // A slow start can outlive a short entry effect; do not resurrect it on
+                    // the client-only entity after the player copy has already expired.
+                    for (EffectSpec effect : List.copyOf(session.cameraEffects.values())) {
+                        Long expiry = session.cameraEffectExpiry.get(effect.type());
+                        if (expiry == null || session.totalTicks < expiry) {
+                            fakeCamera.applyEffect(effect);
+                        }
+                    }
+                    updateFakeMovementSpeed(session);
+                }
+            }
+            if (fakeCamera == null) {
+                // Fallback camera: the client resolves Set Camera against its own entity
+                // list, so the stand must be on the wire first. showEntity pushes it to this
+                // player immediately; setVisibleByDefault(false) keeps it from everybody else.
+                //
+                // Do NOT show it when the fake-player camera is active. Spectators can see
+                // invisible entities (Entity#isInvisibleTo returns false for spectators), so
+                // a normally invisible armor stand would still appear semi-transparent at
+                // the camera position and block the shot.
+                player.showEntity(plugin, camera);
+            }
+            // The server-side spectator target stays the armor stand. With the fake camera,
+            // PacketEvents rewrites the Set Camera packet to the fake player; the client
+            // never needs the armor stand entity at all.
             player.setSpectatorTarget(camera);
         } catch (RuntimeException exception) {
             plugin.getLogger().log(Level.WARNING, "Could not attach spectator camera for " + player.getName(), exception);
@@ -575,13 +652,13 @@ public final class CameraEngine implements CameraService {
     }
 
     private void applyEntryEffects(Session session) {
-        if (session.track.entryEffects().isEmpty()) {
+        if (session.track.entryEffects().isEmpty() || !session.appliesEntryEffects()) {
             return;
         }
-        // Called on the player's scheduler, before the first teleport. Only effects the
-        // client reads from the player (nausea/darkness/night_vision) can cover the cut;
-        // blindness is read from the camera entity and does nothing once attached.
-        // See docs/spectator-effects.md.
+        // Called on the player's scheduler, before the first teleport. The player copy covers
+        // nausea, the lightmap and the HUD. The fake-player camera is created later, after
+        // the start teleport; attach() replays this map onto it so blindness fog and FOV
+        // cover the cut as well. See docs/spectator-effects.md.
         for (EffectSpec effect : session.track.entryEffects()) {
             applyEffectNow(session, effect);
         }
@@ -760,6 +837,13 @@ public final class CameraEngine implements CameraService {
         Location location = new Location(session.world,
                 pose.x(), pose.y() - session.cameraEyeOffset, pose.z(), pose.yaw(), pose.pitch());
         moveCameraEntity(session, camera, location);
+        CameraOverlay.CameraView fakeCamera = session.fakeCamera;
+        if (fakeCamera != null && fakeCamera.active()) {
+            // The fake player is the client's visual camera; the armor stand above remains
+            // the server-side anchor. Both are fed from the same unswayed/swayed pose.
+            fakeCamera.sync(pose);
+            updateFakeMovementSpeed(session);
+        }
         ensureFollowing(session, location);
     }
 
@@ -1079,40 +1163,136 @@ public final class CameraEngine implements CameraService {
             finalizeSession(session, notify);
             return;
         }
-        // Teleport while the player is still a flying spectator, then wait one tick before
-        // restoring the game mode. The extra tick lets the client apply the new body
-        // position/rotation before its camera leaves the armour stand, which removes the
-        // visible snap back to the old body position.
+        Location bodyBefore = player.getLocation();
+        // Restore control *before* the exit teleport. While the player is still camera-locked
+        // or a spectator, the exit teleport races the server's own Set Camera(self) teleport
+        // (ServerPlayer#setCamera) triggered by setSpectatorTarget(null): two absolute-position
+        // packets with interleaved ack ids and justTeleported/awaiting state can leave the
+        // client's position phase wrong, which is what makes walking get silently teleported
+        // back.
+        boolean restored = restorePlayerSafely(session, restoreGameMode);
+        if (!restored) {
+            session.keepRecovery = true;
+        }
+        if (!player.isOnline() || !isCurrent(session)) {
+            finishWithoutPlayer(session);
+            return;
+        }
+        // The restored body may carry spectator/movement residue; a clean placement starts
+        // from zero velocity and no falling distance.
+        clearMotion(player);
+        beginInternalTeleport(session, 1000L);
+        try {
+            player.teleportAsync(destination, PlayerTeleportEvent.TeleportCause.PLUGIN)
+                    .whenComplete((success, error) -> {
+                        endInternalTeleport(session);
+                        if (error != null || !Boolean.TRUE.equals(success)) {
+                            plugin.getLogger().log(Level.WARNING,
+                                    "Could not place player at camera exit location: " + player.getName(), error);
+                            session.completed = false;
+                            session.keepRecovery = true;
+                            // Never leave the player camera-locked in a half-ended session;
+                            // finalize after a tick so the failed teleport has settled.
+                            player.getScheduler().runDelayed(plugin, task -> {
+                                logExitDiagnostics(session, destination, bodyBefore, false, null);
+                                finalizeSession(session, notify);
+                            }, () -> finishWithoutPlayer(session), 1L);
+                            return;
+                        }
+                        // The exit teleport is in; repeat it at the same coordinates one tick
+                        // later (see resyncExitTeleport) and only then finalize.
+                        player.getScheduler().runDelayed(plugin,
+                                task -> resyncExitTeleport(session, destination, bodyBefore, notify),
+                                () -> finishWithoutPlayer(session), 1L);
+                    });
+        } catch (RuntimeException exception) {
+            endInternalTeleport(session);
+            plugin.getLogger().log(Level.WARNING, "Exit teleport threw for " + player.getName(), exception);
+            session.completed = false;
+            session.keepRecovery = true;
+            logExitDiagnostics(session, destination, bodyBefore, false, null);
+            finalizeSession(session, notify);
+        }
+    }
+
+    /**
+     * Repeats the exit teleport once at the same destination, one tick after the first one.
+     *
+     * <p>A second teleport sends a fresh {@code ClientboundPlayerPositionPacket} id/ack,
+     * which resets the client's awaiting-teleport/last-good-position state
+     * ({@code justTeleported}/{@code awaitingPosition}) after an exit that overlapped a
+     * camera release; without it the client can keep validating against the pre-exit
+     * position and silently pull the next steps back. The first teleport already succeeded,
+     * so a failure here is not fatal: the player is at the destination either way.</p>
+     */
+    private void resyncExitTeleport(Session session, Location destination, Location bodyBefore, boolean notify) {
+        Player player = session.player;
+        if (!player.isOnline() || !isCurrent(session)) {
+            finishWithoutPlayer(session);
+            return;
+        }
+        // Movement in the tick between the two teleports must not leak into the re-sync.
+        clearMotion(player);
         beginInternalTeleport(session, 1000L);
         try {
             player.teleportAsync(destination, PlayerTeleportEvent.TeleportCause.PLUGIN)
                     .whenComplete((success, error) -> {
                         endInternalTeleport(session);
                         player.getScheduler().runDelayed(plugin, task -> {
-                            boolean restored = restorePlayerSafely(session, restoreGameMode);
-                            if (!restored) {
-                                session.keepRecovery = true;
+                            boolean resynced = error == null && Boolean.TRUE.equals(success);
+                            if (!resynced) {
+                                plugin.getLogger().log(config.get().debug() ? Level.WARNING : Level.FINE,
+                                        "Could not re-sync camera exit teleport for " + player.getName(), error);
                             }
-                            if (error != null || !Boolean.TRUE.equals(success)) {
-                                plugin.getLogger().log(Level.WARNING,
-                                        "Could not place player at camera exit location: " + player.getName(), error);
-                                session.completed = false;
-                                session.keepRecovery = true;
-                            } else {
-                                session.completed = session.endReason == EndReason.FINISHED;
-                            }
+                            session.completed = session.endReason == EndReason.FINISHED;
+                            logExitDiagnostics(session, destination, bodyBefore, true, resynced);
                             finalizeSession(session, notify);
                         }, () -> finishWithoutPlayer(session), 1L);
                     });
         } catch (RuntimeException exception) {
             endInternalTeleport(session);
-            plugin.getLogger().log(Level.WARNING, "Exit teleport threw for " + player.getName(), exception);
-            boolean restored = restorePlayerSafely(session, restoreGameMode);
-            if (!restored) {
-                session.keepRecovery = true;
-            }
+            plugin.getLogger().log(Level.WARNING, "Camera exit re-sync teleport threw for "
+                    + player.getName(), exception);
+            session.completed = session.endReason == EndReason.FINISHED;
+            logExitDiagnostics(session, destination, bodyBefore, true, false);
             finalizeSession(session, notify);
         }
+    }
+
+    private static void clearMotion(Player player) {
+        player.setVelocity(new Vector(0, 0, 0));
+        player.setFallDistance(0.0f);
+    }
+
+    /**
+     * Debug-only one-liner for user reports: where the exit teleport went, where the body was
+     * before/after it, and whether the first teleport and the same-position re-sync worked.
+     */
+    private void logExitDiagnostics(
+            Session session,
+            Location destination,
+            Location bodyBefore,
+            boolean teleported,
+            Boolean resynced
+    ) {
+        if (!config.get().debug()) {
+            return;
+        }
+        Player player = session.player;
+        String bodyAfter = player.isOnline() ? coordinates(player.getLocation()) : "offline";
+        plugin.getLogger().info("Camera exit: track=" + session.track.id()
+                + " destination=" + coordinates(destination)
+                + " body-before=" + coordinates(bodyBefore)
+                + " body-after=" + bodyAfter
+                + " teleported=" + teleported
+                + " resynced=" + (resynced == null ? "skipped" : resynced));
+    }
+
+    private static String coordinates(Location location) {
+        // Six decimals so a user report can show the sub-millimetre placements this exit
+        // workaround is about (0.1 mm = 0.0001 blocks).
+        return String.format(Locale.ROOT, "%.6f/%.6f/%.6f",
+                location.getX(), location.getY(), location.getZ());
     }
 
     private boolean restorePlayerSafely(Session session, boolean restoreGameMode) {
@@ -1145,58 +1325,68 @@ public final class CameraEngine implements CameraService {
         // Use the unswayed track pose, not the last rendered frame: the editor saved the
         // base pose, so exiting there keeps the final coordinates exact. Natural sway is
         // only ~0.06 blocks / 0.6 degrees, so dropping that last-frame offset is invisible.
-        Pose pose = session.currentPose;
-        double eyeHeight = session.player.getEyeHeight();
-        return new Location(session.world, pose.x(), pose.y() - eyeHeight, pose.z(), pose.yaw(), pose.pitch());
+        // ExitPlacement turns the eye pose into feet without the float eye-height underflow
+        // and without embedding the body in a slab/stairs collision shape.
+        return ExitPlacement.feet(session.world, session.currentPose, session.player.getEyeHeight());
     }
 
     private boolean restorePlayer(Session session, boolean restoreGameMode) {
         Player player = session.player;
+        // Let the server's upcoming Set Camera(player) through. If the fake camera stayed
+        // active, the listener would rewrite that reset back to the fake entity and the
+        // client would keep looking through a camera that is about to be destroyed.
+        deactivateFakeCamera(session);
         PlayerStateSnapshot original = session.original;
-        if (original == null) {
-            return true;
-        }
         boolean restored = true;
-        if (restoreGameMode) {
-            try {
-                if (player.getGameMode() == GameMode.SPECTATOR) {
-                    player.setSpectatorTarget(null);
-                }
-            } catch (RuntimeException ignored) {
-                // The target may already be gone; game mode change below still works.
+        try {
+            if (original == null) {
+                return true;
             }
-            session.internalModeChange = true;
-            try {
-                if (player.getGameMode() != original.gameMode()) {
-                    player.setGameMode(original.gameMode());
+            if (restoreGameMode) {
+                try {
+                    if (player.getGameMode() == GameMode.SPECTATOR) {
+                        player.setSpectatorTarget(null);
+                    }
+                } catch (RuntimeException ignored) {
+                    // The target may already be gone; game mode change below still works.
                 }
-                // A listener can cancel PlayerGameModeChangeEvent. Do not report a
-                // successful restore (and delete the recovery file) if the player is still
-                // stuck in spectator.
-                restored = player.getGameMode() == original.gameMode();
-                player.setAllowFlight(original.allowFlight());
-                if (original.allowFlight()) {
-                    player.setFlying(original.flying());
+                session.internalModeChange = true;
+                try {
+                    if (player.getGameMode() != original.gameMode()) {
+                        player.setGameMode(original.gameMode());
+                    }
+                    // A listener can cancel PlayerGameModeChangeEvent. Do not report a
+                    // successful restore (and delete the recovery file) if the player is still
+                    // stuck in spectator.
+                    restored = player.getGameMode() == original.gameMode();
+                    player.setAllowFlight(original.allowFlight());
+                    if (original.allowFlight()) {
+                        player.setFlying(original.flying());
+                    }
+                    player.setWalkSpeed(original.walkSpeed());
+                    player.setFlySpeed(original.flySpeed());
+                    player.setFallDistance(0.0f);
+                } finally {
+                    session.internalModeChange = false;
                 }
-                player.setWalkSpeed(original.walkSpeed());
-                player.setFlySpeed(original.flySpeed());
-                player.setFallDistance(0.0f);
-            } finally {
-                session.internalModeChange = false;
-            }
-            if (original.gameMode() == GameMode.SPECTATOR && original.spectatorTarget() != null) {
-                Entity target = Bukkit.getEntity(original.spectatorTarget());
-                if (target != null && target.isValid() && target.getWorld().equals(player.getWorld())) {
-                    try {
-                        player.setSpectatorTarget(target);
-                    } catch (RuntimeException ignored) {
-                        // Old target no longer accepts spectators.
+                if (original.gameMode() == GameMode.SPECTATOR && original.spectatorTarget() != null) {
+                    Entity target = Bukkit.getEntity(original.spectatorTarget());
+                    if (target != null && target.isValid() && target.getWorld().equals(player.getWorld())) {
+                        try {
+                            player.setSpectatorTarget(target);
+                        } catch (RuntimeException ignored) {
+                            // Old target no longer accepts spectators.
+                        }
                     }
                 }
             }
+            return restored;
+        } finally {
+            // An exception in a game-mode/teleport restore must not strand an infinite
+            // blindness/darkness effect on the player. Effect cleanup is independent of the
+            // camera restore and is cheap, so always run it.
+            restoreEffects(session, session.totalTicks);
         }
-        restoreEffects(session, session.totalTicks);
-        return restored;
     }
 
     private void restoreEffects(Session session, int elapsedTicks) {
@@ -1286,7 +1476,23 @@ public final class CameraEngine implements CameraService {
         session.keepRecovery = true;
     }
 
+    private void deactivateFakeCamera(Session session) {
+        CameraOverlay.CameraView fakeCamera = session.fakeCamera;
+        if (fakeCamera != null) {
+            fakeCamera.deactivate();
+        }
+    }
+
+    private void destroyFakeCamera(Session session) {
+        CameraOverlay.CameraView fakeCamera = session.fakeCamera;
+        session.fakeCamera = null;
+        if (fakeCamera != null) {
+            fakeCamera.destroy();
+        }
+    }
+
     private void removeCamera(Session session) {
+        destroyFakeCamera(session);
         ArmorStand camera = session.camera;
         session.camera = null;
         // Release tickets before the entity is retired. The retired callback must not
@@ -1360,10 +1566,11 @@ public final class CameraEngine implements CameraService {
     }
 
     /**
-     * Effects always target the player, never the camera armor stand: the client only sends a
-     * non-player entity's effect packets to its passengers, and a spectator target is not a
-     * passenger. Note that this still does not make camera-entity effects (blindness fog, FOV)
-     * visible while attached; see {@code docs/spectator-effects.md}.
+     * Effects are applied to the player (HUD, nausea shake, lightmap) and, when PacketEvents
+     * provides a fake-player camera, also to that client-only camera entity. The fake player
+     * is what makes blindness fog, darkness/night-vision fog and the FOV calculation see the
+     * effect; the real player remains the source of the screen-space effects. The armor stand
+     * itself is never an effect target.
      */
     private void applyEffectNow(Session session, EffectSpec spec) {
         Player player = session.player;
@@ -1373,13 +1580,64 @@ public final class CameraEngine implements CameraService {
         try {
             if (spec.action() == net.ria.zth.camerarail.model.EffectAction.ADD) {
                 player.removePotionEffect(spec.type());
-                player.addPotionEffect(spec.toPotionEffect());
+                if (!player.addPotionEffect(spec.toPotionEffect())) {
+                    plugin.getLogger().warning("The server refused effect " + spec.key()
+                            + " for " + player.getName() + "; the camera copy will be cleared.");
+                    session.cameraEffects.remove(spec.type());
+                    session.cameraEffectExpiry.remove(spec.type());
+                    return;
+                }
+                session.cameraEffects.put(spec.type(), spec);
+                session.cameraEffectExpiry.put(spec.type(), spec.durationTicks() == 0
+                        ? Long.MAX_VALUE
+                        : session.totalTicks + spec.durationTicks());
+                CameraOverlay.CameraView fakeCamera = session.fakeCamera;
+                if (fakeCamera != null && fakeCamera.active()) {
+                    fakeCamera.applyEffect(spec);
+                }
             } else {
                 player.removePotionEffect(spec.type());
+                session.cameraEffects.remove(spec.type());
+                session.cameraEffectExpiry.remove(spec.type());
+                CameraOverlay.CameraView fakeCamera = session.fakeCamera;
+                if (fakeCamera != null && fakeCamera.active()) {
+                    fakeCamera.removeEffect(spec.type());
+                }
             }
+            updateFakeMovementSpeed(session);
         } catch (RuntimeException exception) {
             plugin.getLogger().log(Level.WARNING, "Could not apply camera effect " + spec.key(), exception);
         }
+    }
+
+    /**
+     * The client does not apply a mob effect's attribute modifiers to a client-only entity,
+     * so slowness/speed FOV is expressed as the fake player's movement-speed attribute. The
+     * attribute is recomputed from the active effects, which also handles natural expiry.
+     */
+    private void updateFakeMovementSpeed(Session session) {
+        CameraOverlay.CameraView fakeCamera = session.fakeCamera;
+        if (fakeCamera == null || !fakeCamera.active()) {
+            return;
+        }
+        long now = session.totalTicks;
+        for (Map.Entry<PotionEffectType, EffectSpec> entry : session.cameraEffects.entrySet()) {
+            Long expiry = session.cameraEffectExpiry.get(entry.getKey());
+            // Expiry is tracked here so natural expiry also removes the camera copy. The
+            // player check covers milk, death and external /effect clear: never leave a
+            // client-only effect (especially darkness fog) behind when the player copy is gone.
+            if ((expiry != null && now >= expiry) || !session.player.hasPotionEffect(entry.getKey())) {
+                if (session.cameraEffects.remove(entry.getKey(), entry.getValue())) {
+                    session.cameraEffectExpiry.remove(entry.getKey());
+                    fakeCamera.removeEffect(entry.getKey());
+                }
+            }
+        }
+        EffectSpec slowness = session.cameraEffects.get(PotionEffectType.SLOWNESS);
+        EffectSpec speedEffect = session.cameraEffects.get(PotionEffectType.SPEED);
+        fakeCamera.setMovementSpeed(CameraFov.movementSpeed(
+                slowness == null ? CameraFov.ABSENT : slowness.amplifier(),
+                speedEffect == null ? CameraFov.ABSENT : speedEffect.amplifier()));
     }
 
     private void sendTitleNow(Session session, TitleStep step) {

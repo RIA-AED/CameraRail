@@ -6,6 +6,7 @@ import net.ria.zth.camerarail.editor.EditorManager;
 import net.ria.zth.camerarail.editor.EditorUI;
 import net.ria.zth.camerarail.message.Messages;
 import net.ria.zth.camerarail.model.CameraTrack;
+import net.ria.zth.camerarail.model.EffectSpec;
 import net.ria.zth.camerarail.model.ExitMode;
 import net.ria.zth.camerarail.runtime.CameraEngine;
 import org.bukkit.Bukkit;
@@ -123,6 +124,9 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
         infoLine(sender, "摇摆", "周期 " + track.sway().period() + "t / x " + track.sway().x()
                 + " / yaw " + track.sway().yaw());
         infoLine(sender, "跟随区块", track.follow() ? "开启" : "关闭");
+        infoLine(sender, "镜头模式", engine.fakeCameraAvailable()
+                ? "假玩家 (PacketEvents)" : "盔甲架回退");
+        infoLine(sender, "入场效果", entryEffectsLabel(track));
         infoLine(sender, "等待信号", track.waitSignals().isEmpty() ? "无"
                 : String.join(", ", track.waitSignals()));
         if (!track.description().isBlank()) {
@@ -136,6 +140,17 @@ public final class CameraCommand implements CommandExecutor, TabCompleter {
 
     private void infoLine(CommandSender sender, String label, String value) {
         messages.get().send(sender, "track.info-line", "label", label, "value", value);
+    }
+
+    private static String entryEffectsLabel(CameraTrack track) {
+        if (track.entryEffects().isEmpty()) {
+            return "无";
+        }
+        List<String> parts = new ArrayList<>();
+        for (EffectSpec effect : track.entryEffects()) {
+            parts.add(effect.describe());
+        }
+        return String.join("、", parts);
     }
 
     private void play(CommandSender sender, String[] args, String label) {

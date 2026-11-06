@@ -41,6 +41,8 @@ camera:
   game-mode: "<gray>检测到游戏模式被外部修改，镜头已结束."
   world-change: "<gray>检测到世界切换，镜头已结束."
   camera-lost: "<red>镜头实体丢失，动画已结束."
+  fake-camera-unavailable: "<gray>当前未启用假玩家镜头：<white>blindness</white>/<white>slowness</white>/<white>speed</white> 不会产生画面，FOV 固定为 1.0；<white>darkness</white>/<white>night_vision</white> 仅部分生效. 安装 PacketEvents 后可启用."
+  fake-camera-failed: "<gray>假玩家镜头创建失败，已回退到盔甲架镜头；FOV 和失明雾不可用."
   error: "<red>镜头发生错误，动画已结束."
   ended: "<gray>镜头结束: {reason}."
   recovered: "<gray>已恢复上次中断的过场状态."
@@ -120,7 +122,7 @@ editor:
   select-usage: "<gray>用法: <white>/zth-camera edit select <索引></white>."
   no-permission: "<gray>你没有权限编辑轨道."
   duplicate-signal: "<gray>等待信号 <white>{signal}</white> 已存在."
-  invalid-effect: "<gray>未知的药水效果 <white>{effect}</white>. 可以使用 darkness、nausea、night_vision 或带命名空间的 id."
+  invalid-effect: "<gray>未知的药水效果 <white>{effect}</white>. 可以使用 blindness、darkness、nausea、night_vision、slowness、speed 或带命名空间的 id."
   invalid-title: "<gray>标题文本不是合法的 MiniMessage."
   invalid-value: "<gray>无效的值 <white>{value}</white>."
   limit: "<gray>已达到限制: <white>{limit}</white>."
@@ -299,7 +301,7 @@ help:
           - "[超时] 单位 tick，默认取配置值，0 表示不超时"
       effect:
         summary: "追加药水效果步骤"
-        detail: "时长为 0 时效果持续到被显式移除或轨道结束."
+        detail: "effect 是瞬时步骤，duration 只决定效果持续时间，不阻塞后续动画. 时长为 0 时持续到被显式移除或轨道结束；darkness 的淡入/淡出约 22 tick. FOV、blindness 和 slowness/speed 需要 PacketEvents 假玩家镜头，未安装时自动回退到盔甲架镜头."
         args:
           - "<add|remove> 添加或移除效果"
           - "<效果> 效果 id 或常见缩写"

@@ -19,6 +19,7 @@ import net.ria.zth.camerarail.api.CameraTrackEndEvent;
 import net.ria.zth.camerarail.config.RailConfig;
 import net.ria.zth.camerarail.config.TrackRepository;
 import net.ria.zth.camerarail.message.Messages;
+import net.ria.zth.camerarail.model.CameraEffects;
 import net.ria.zth.camerarail.model.CameraTrack;
 import net.ria.zth.camerarail.model.CutStep;
 import net.ria.zth.camerarail.model.Easing;
@@ -36,6 +37,7 @@ import net.ria.zth.camerarail.model.SwayPreset;
 import net.ria.zth.camerarail.model.SwaySettings;
 import net.ria.zth.camerarail.model.TitleStep;
 import net.ria.zth.camerarail.model.WaitStep;
+import net.ria.zth.camerarail.runtime.ExitPlacement;
 import net.ria.zth.camerarail.runtime.TrackTimeline;
 import org.bukkit.Location;
 import org.bukkit.World;
@@ -46,6 +48,7 @@ import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.event.player.PlayerTeleportEvent;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.potion.PotionEffectType;
+import org.bukkit.util.Vector;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -62,6 +65,7 @@ import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
+import java.util.logging.Level;
 import java.util.regex.Pattern;
 
 /**
@@ -317,7 +321,9 @@ public final class EditorUI implements Listener {
         buttons.add(button(submenu("轨道设置"), "摇摆 " + preset + " · 跟随"
                 + (track.follow() ? "开" : "关"),
                 p -> showTrackSettings(p, null, null)));
-        buttons.add(button(submenu("入场效果"), track.entryEffects().size() + " 个",
+        int entryEffectCount = track.entryEffects().size();
+        buttons.add(button(submenu("入场效果 (" + entryEffectCount + ")"),
+                entryEffectCount + " 个 · 点击管理入场效果",
                 p -> showEntryEffects(p, 0, null)));
         if (player.hasPermission("zth.camera.manage")) {
             buttons.add(button("删除轨道", "删除整条轨道", this::confirmDeleteTrack));
@@ -338,6 +344,9 @@ public final class EditorUI implements Listener {
         }
         if (!player.getWorld().getName().equals(track.worldName())) {
             lines.add(text("当前不在轨道世界 " + track.worldName() + "；取景会被拒绝.", NamedTextColor.RED));
+        }
+        if (!editors.fakeCameraAvailable()) {
+            lines.add(text("镜头模式: 盔甲架回退 · FOV/失明雾不可用", NamedTextColor.GRAY));
         }
         show(player, dialog(text("轨道 · " + track.id(), NamedTextColor.WHITE),
                 body(notice, lines.toArray(Component[]::new)), List.of(), buttons, 2));
@@ -884,8 +893,10 @@ public final class EditorUI implements Listener {
                     p -> showEffectPicker(p, current + 1, values, onSelect, onBack)));
         }
         buttons.add(button(back("返回"), "回到效果表单，保留当前输入", p -> onBack.accept(p, values)));
-        String summary = "常用药水效果 · 附身镜头下仅 nausea/darkness/night_vision 有画面 · "
-                + COMMON_EFFECTS.size() + " 个"
+        String mode = editors.fakeCameraAvailable()
+                ? "假玩家镜头下 blindness/slowness/speed 也有画面"
+                : "当前为盔甲架回退模式：blindness/slowness/speed 无画面";
+        String summary = "常用药水效果 · " + mode + " · " + COMMON_EFFECTS.size() + " 个"
                 + (COMMON_EFFECTS.size() > PAGE_SIZE
                 ? " · 第 " + (current + 1) + "/" + pageCount(COMMON_EFFECTS.size()) + " 页" : "");
         show(player, dialog(text("常用效果", NamedTextColor.WHITE),
@@ -987,8 +998,34 @@ public final class EditorUI implements Listener {
                                 notice("已选择效果.", false)),
                         (q, next) -> showEffectStepForm(q, index, adding, step, next, null))));
         addEditActions(player, buttons, index, adding);
-        show(player, dialog(text(stepTitle(adding, index, "效果"), NamedTextColor.WHITE), body(notice),
-                inputs, buttons, 1));
+        List<Component> lines = new ArrayList<>();
+        if (!editors.fakeCameraAvailable() && CameraEffects.isCameraDependent(effect)) {
+            lines.add(fallbackEffectLine());
+        }
+        lines.add(effectTimingLine(false));
+        if (CameraEffects.isDarkness(effect)) {
+            lines.add(darknessBlendLine());
+        }
+        show(player, dialog(text(stepTitle(adding, index, "效果"), NamedTextColor.WHITE),
+                body(notice, lines.toArray(Component[]::new)), inputs, buttons, 1));
+    }
+
+    private Component fallbackEffectLine() {
+        return text("当前为盔甲架回退模式：FOV、blindness 与 slowness/speed 无画面；"
+                + "darkness/night_vision 仅部分生效.", NamedTextColor.GRAY);
+    }
+
+    private Component darknessBlendLine() {
+        return text("darkness 的淡入/淡出约 22 tick；时长短于这个值或刚移除时，"
+                + "画面只会部分变暗/变亮.", NamedTextColor.GRAY);
+    }
+
+    private Component effectTimingLine(boolean entry) {
+        return text(entry
+                ? "入场效果只在镜头从轨道起点开始时施加；从中间步骤开始的预览不会触发. "
+                + "duration 不阻塞镜头开始."
+                : "效果是瞬时步骤：duration 只决定效果持续时间，不阻塞后续动画.",
+                NamedTextColor.GRAY);
     }
 
     private void saveEffectStep(Player player, int index, boolean adding, EffectStep original,
@@ -1528,10 +1565,17 @@ public final class EditorUI implements Listener {
         }
         buttons.add(button(submenu("添加效果"), "在进入镜头前追加一个效果", p -> showEntryEffectForm(p, -1, null, null)));
         buttons.add(button(back("返回"), "回到轨道概览", p -> showTrack(p, null)));
+        List<Component> lines = new ArrayList<>();
+        if (!editors.fakeCameraAvailable() && effects.stream().anyMatch(CameraEffects::isCameraDependent)) {
+            lines.add(fallbackEffectLine());
+        }
+        if (effects.stream().anyMatch(CameraEffects::isDarkness)) {
+            lines.add(darknessBlendLine());
+        }
+        lines.add(text(effects.size() + " 个 · 第 " + (current + 1) + "/"
+                + pageCount(effects.size()) + " 页 · 进入镜头前施加", NamedTextColor.GRAY));
         show(player, dialog(text("入场效果 · " + session.draft.id(), NamedTextColor.WHITE),
-                body(notice, text(effects.size() + " 个 · 第 " + (current + 1) + "/"
-                        + pageCount(effects.size()) + " 页 · 进入镜头前施加", NamedTextColor.GRAY)),
-                List.of(), buttons, 1));
+                body(notice, lines.toArray(Component[]::new)), List.of(), buttons, 1));
     }
 
     private void showEntryEffectForm(Player player, int index, Map<String, String> values, Notice notice) {
@@ -1571,9 +1615,18 @@ public final class EditorUI implements Listener {
             buttons.add(button("删除", "删除这个入场效果", p -> deleteEntryEffect(p, index)));
         }
         buttons.add(button("取消", "不保存并回到入场效果列表", p -> showEntryEffects(p, 0, null)));
+        List<Component> lines = new ArrayList<>();
+        if (!editors.fakeCameraAvailable()
+                && (existing == null || CameraEffects.isCameraDependent(existing))) {
+            lines.add(fallbackEffectLine());
+        }
+        lines.add(effectTimingLine(true));
+        if (existing == null || CameraEffects.isDarkness(existing)) {
+            lines.add(darknessBlendLine());
+        }
+        lines.add(text("只支持添加；时长 0 = 持续.", NamedTextColor.GRAY));
         show(player, dialog(text(existing == null ? "添加入场效果" : "入场效果 " + (index + 1), NamedTextColor.WHITE),
-                body(notice, text("只支持添加；时长 0 = 持续.", NamedTextColor.GRAY)),
-                inputs, buttons, 1));
+                body(notice, lines.toArray(Component[]::new)), inputs, buttons, 1));
     }
 
     private void saveEntryEffect(Player player, int index, Map<String, String> raw) {
@@ -1700,14 +1753,11 @@ public final class EditorUI implements Listener {
             player.sendActionBar(Component.text("轨道世界未加载.", NamedTextColor.RED));
             return;
         }
-        Location target;
-        if (feet) {
-            target = pose.toLocation(world);
-        } else {
-            // Camera poses are eye positions; the player must stand at pose.y - eyeHeight.
-            double eyeHeight = player.getEyeHeight();
-            target = new Location(world, pose.x(), pose.y() - eyeHeight, pose.z(), pose.yaw(), pose.pitch());
-        }
+        Location target = feet
+                ? pose.toLocation(world)
+                // Camera poses are eye positions; ExitPlacement puts the standing body
+                // 0.1 mm above the surface and clear of any slab/stair collision shape.
+                : ExitPlacement.feet(world, pose, player.getEyeHeight());
         player.closeDialog();
         player.teleportAsync(target, PlayerTeleportEvent.TeleportCause.PLUGIN).whenComplete((success, error) -> {
             player.getScheduler().execute(plugin, () -> {
@@ -1715,6 +1765,39 @@ public final class EditorUI implements Listener {
                     player.sendActionBar(Component.text("传送失败.", NamedTextColor.RED));
                 } else {
                     player.sendActionBar(Component.text("已传送到此；/zc edit 回到编辑器.", NamedTextColor.GRAY));
+                    // Same-position re-sync as the camera exit: one tick later, repeat the
+                    // placement so the client receives a fresh position id/ack instead of
+                    // keeping a stale awaiting-teleport phase that silently pulls the next
+                    // step back.
+                    player.getScheduler().runDelayed(plugin,
+                            task -> resyncEditorTeleport(player, target), () -> {
+                            }, 1L);
+                }
+            }, () -> {
+            }, 0L);
+        });
+    }
+
+    /**
+     * Repeats an editor teleport once at the same target, one tick after the first one
+     * succeeded. Same rationale as {@code CameraEngine}'s exit re-sync: the fresh
+     * client-bound position id/ack resets the client's teleport acknowledgement state.
+     */
+    private void resyncEditorTeleport(Player player, Location target) {
+        if (!player.isOnline() || !player.getWorld().equals(target.getWorld())) {
+            return;
+        }
+        player.setVelocity(new Vector(0, 0, 0));
+        player.setFallDistance(0.0f);
+        player.teleportAsync(target, PlayerTeleportEvent.TeleportCause.PLUGIN).whenComplete((success, error) -> {
+            if (error == null && Boolean.TRUE.equals(success)) {
+                return;
+            }
+            plugin.getLogger().log(Level.FINE,
+                    "Could not re-sync editor teleport for " + player.getName(), error);
+            player.getScheduler().execute(plugin, () -> {
+                if (player.isOnline()) {
+                    player.sendActionBar(Component.text("传送重同步失败.", NamedTextColor.GRAY));
                 }
             }, () -> {
             }, 0L);

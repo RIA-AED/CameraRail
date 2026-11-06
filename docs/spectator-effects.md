@@ -1,126 +1,187 @@
-# 旁观者附身镜头下的药水效果
+# 旁观者镜头下的药水效果与假玩家摄像机
 
-本文针对 **Minecraft 26.1.2 原版客户端**（Paper 26.1.2 服务端）确认。结论来自对客户端 jar 的反编译，而不是只看服务端 `getPotionEffects()` 是否为空。
+本文针对 **Minecraft 26.1.2 原版客户端**（Paper 26.1.2 服务端）确认。客户端行为来自对 26.1.2 客户端 jar 的反编译；服务端行为来自 Paper 26.1.2 与 PacketEvents 2.14.0 的实际启动验证。
 
-## 结论
+## 当前实现：盔甲架锚点 + 客户端假玩家
 
-1. `effect` 步骤施加给 **玩家**（`CameraEngine#applyEffectNow` 里的 `session.player`），不是盔甲架。目标对象本身是对的，不要改成 `session.camera`。
-2. 但“施加给玩家”不等于“画面上一定看得到”。附身到盔甲架后，客户端把效果分成两类读取者：
-   - `minecraft.player`（看画面的旁观者）；
-   - `camera entity`（当前是盔甲架）。
-3. 盔甲架身上的药水效果**不会**同步给旁观者，所以把效果改施加到盔甲架也不会生效。
-4. 在“盔甲架 + 旁观者附身”模式下，真正有画面的只剩：
-   - `nausea`：完整；
-   - `darkness`：部分（世界亮度/脉动，缺雾和天空压暗）；
-   - `night_vision`：大部分（亮度提升，缺雾色提亮）。
+从 2026-11 起，插件采用两层结构：
 
-   `blindness`、`slowness`、`speed` 等没有画面效果。
+```text
+服务端：隐藏盔甲架（真正的 spectator target、区块票据、每 tick 吸附、跨区块跟随）
+   │
+   │  ClientboundSetCameraPacket(armorStand)
+   ▼
+PacketEvents：把包里的 camera id 改写成假玩家 id
+   │
+   ▼
+客户端：只存在于该客户端的 PLAYER 实体（假玩家）
+   = client Camera entity / AbstractClientPlayer
+```
+
+- **服务端 `getSpectatorTarget()` 仍然是盔甲架**。`ServerPlayer#tick` 继续把玩家身体吸附到盔甲架，`follow-camera` 继续用玩家实体加载区块。
+- 假玩家镜头激活时，盔甲架**不会**发给该客户端，只作为服务端 spectator target 存在。旁观者客户端能看见 invisible 实体，若把盔甲架也发过去，镜头位置会出现半透明模型；只有回退到盔甲架镜头时才 `showEntity`。
+- **客户端 Camera 是假玩家**。假玩家由 PacketEvents 的 `PlayerInfoUpdate`、`SpawnEntity(PLAYER)`、`EntityMetadata`、`UpdateAttributes`、`EntityPositionSync`、`EntityHeadLook` 生成；没有服务端实体、没有连接、没有区块票据。
+- 假玩家的位置、pitch 和身体朝向每 3 tick 从同一份镜头姿态同步一次（`EntityPositionSync`），节奏与精确实体跟踪一致；客户端负责插值。
+- **视角 yaw 走 head yaw**。客户端旁观相机读取 `LivingEntity#getViewYRot`（即 `yHeadRot`），而 `EntityPositionSync` 只写身体朝向；假玩家没有服务端实体，原版 `ServerEntity` 不会替它生成 `ClientboundRotateHeadPacket`。因此插件在量化后的 head yaw 变化时逐镜头 tick 下发 `EntityHeadLook`；`spawn` 包里的 head yaw 只保证初始视角正确，之后的旋转完全依赖这个包。
+- head yaw 在协议中只有 1 字节（1/256 圈 = 1.40625°），客户端还会对它做 3 tick 插值；慢速缓动因此可能有亚度级台阶和约 2–3 tick 的跟随滞后。这与盔甲架回退模式（`ArmorStand` 同为 `LivingEntity`）以及旁观原版玩家时一致，不是假玩家路径特有的退化。
+- 假玩家的 FOV 由插件计算 `MOVEMENT_SPEED` 并下发属性包；`slowness`/`speed` 不再作为效果包发给假玩家，避免效果与属性双重修正。
+- 会话结束时先停止改写 `Set Camera`，让服务端把客户端镜头切回玩家自身，再销毁假玩家并移除其 PlayerInfo。
+
+这解决的不是“让盔甲架拥有玩家属性”，而是**换一个客户端 Camera 实体**：服务端锚点保持原样，客户端看到一个真正的 `AbstractClientPlayer`。
 
 ## 客户端到底读谁
 
-| 渲染点 | 读取对象 | 附身盔甲架时 |
+| 渲染点 | 读取对象 | 假玩家镜头下 |
 | --- | --- | --- |
-| 视角摇晃 `GameRenderer#tick` / `#renderLevel` | `minecraft.player` | `nausea` 生效 |
-| 亮度、黑暗脉动 `LightmapRenderStateExtractor#extract` | `minecraft.player` | `darkness`、`night_vision` 生效 |
-| FOV `Camera#tickFov` | `getCameraEntity() instanceof AbstractClientPlayer` | 盔甲架不是玩家 → 倍率恒为 1.0 |
-| 失明/黑暗天空 `Camera#extractRenderState`（`doesMobEffectBlockSky`） | `camera.entity()` | 盔甲架没有效果 → 不压暗 |
-| 失明/黑暗/夜视雾 `FogRenderer` + `BlindnessFogEnvironment` / `DarknessFogEnvironment` | `camera.entity()` | 盔甲架没有效果 → 无雾 |
-| 水下、着火、方块遮脸 `ScreenEffectRenderer` | `minecraft.player`，并检查 `isSpectator()` / `noPhysics` | 旁观者被明确跳过 |
-| HUD 效果图标 `Gui#extractEffects` | `minecraft.player`，看 `showIcon` | 插件设为 `false`，本来就不显示 |
+| 视角摇晃 `GameRenderer#tick` / `#renderLevel` | `minecraft.player` | `nausea` 由真实玩家提供，完整生效 |
+| 亮度、黑暗脉动 `LightmapRenderStateExtractor#extract` | `minecraft.player` | `darkness` / `night_vision` 由真实玩家提供 |
+| FOV `Camera#tickFov` | `getCameraEntity() instanceof AbstractClientPlayer` | 假玩家是 `AbstractClientPlayer` → FOV 生效 |
+| 失明/黑暗天空 `Camera#extractRenderState` | `camera.entity()` | 假玩家收到效果 → 生效 |
+| 失明/黑暗/夜视雾 `FogRenderer` | `camera.entity()` | 假玩家收到效果 → 生效 |
+| 水下、着火、方块遮脸 `ScreenEffectRenderer` | `minecraft.player`，并检查 `isSpectator()` | 旁观者被明确跳过，仍然没有 |
+| HUD 效果图标 `Gui#extractEffects` | `minecraft.player`，看 `showIcon` | 插件设置 `showIcon=false`；客户端/整合包仍可能显示自己的效果提示，但它只是 darkness，不是 blindness |
+| 全屏渐变/黑场 | 没有原版协议包 | 仍然不能做 |
 
-`blindness` 在客户端渲染路径里只被 `Camera`（天空压暗）和 `BlindnessFogEnvironment`（雾）读取，二者都读 `camera.entity()`；`Player#isBlind` 只影响疾跑判定，不产生画面。`slowness` 没有独立的客户端引用，它通过 `MOVEMENT_SPEED` 属性影响 FOV，而 FOV 只对 `AbstractClientPlayer` 镜头实体生效。因此这两个效果在附身盔甲架时是“零像素”的。
+因此，同一个药水效果现在可以同时发给两个实体：
 
-`darkness` 和 `night_vision` 则是“一半一半”：亮度图读旁观者自己，所以能变暗/提亮；雾（以及 `darkness` 的天空压暗）读镜头实体，所以不会跟着变。
+- **真实玩家**：负责 `nausea`、亮度图、HUD 状态；
+- **假玩家**：负责 FOV、失明/黑暗天空、雾。
 
-## 为什么施加给盔甲架也没用
+`slowness` / `speed` 没有独立的客户端渲染代码，它们通过 `MOVEMENT_SPEED` 属性改变 FOV；假玩家是玩家实体，所以这条路径终于能生效。
+
+但这里有一个容易踩的坑：**客户端不会为实体应用药水自带的属性修正**。`LivingEntity#onEffectAdded` 在 `level.isClientSide()` 时直接返回，属性修正原本由服务端计算并通过 `ClientboundUpdateAttributesPacket` 下发。假玩家没有服务端实体，因此插件必须自己根据 `slowness`/`speed` 等级计算移动速度，并用 `WrapperPlayServerUpdateAttributes` 下发；只发 `EntityEffect` 效果包不会改变 FOV。
+
+## FOV 的实际行为
+
+`AbstractClientPlayer#getFieldOfViewModifier` 的核心是：
+
+```text
+modifier = (MOVEMENT_SPEED / walkingSpeed + 1) / 2
+```
+
+玩家默认 `walkingSpeed = 0.1`、`MOVEMENT_SPEED = 0.1`，所以默认倍率是 1.0。`slowness` 每级给 `MOVEMENT_SPEED` 一个 `-15%` 的乘算修正，`speed` 每级 `+20%`：
+
+| 效果 | 等级（amplifier） | 近似 FOV 倍率 |
+| --- | --- | --- |
+| `slowness` | 0 / 1 / 2 / 3 / 4 | 0.925 / 0.85 / 0.775 / 0.70 / 0.625 |
+| `speed` | 0 / 1 / 2 / 3 / 4 | 1.10 / 1.20 / 1.30 / 1.40 / 1.50（上限） |
+
+最终视野还会乘以客户端“视野”设置，并受 `Camera#tickFov` 的 `0.1..1.5` 限制和 0.5 平滑影响。客户端“效果视角”选项（`fovEffectScale`）为 0 时，FOV 变化会被插值回 1.0，这是原版行为。
+
+插件目前**没有独立的 `fov` 步骤字段**；FOV 通过现有的 `effect` 步骤使用 `slowness` / `speed` 表达。这样效果时长、等级和移除 action 都能复用现有轨道格式。
+
+## 效果能力表
+
+| 效果 | 假玩家镜头 | 说明 |
+| --- | --- | --- |
+| `nausea` | ✅ 完整 | 视角摇晃读真实玩家 |
+| `blindness` | ✅ 雾 + 天空压暗 | 假玩家收到效果 |
+| `darkness` | ✅ 亮度 + 雾 + 天空 | 真实玩家提供亮度，假玩家提供雾/天空 |
+| `night_vision` | ✅ 亮度 + 雾色 | 同上 |
+| `slowness` | ✅ FOV 收窄（原生 26.1.2） | 假玩家 `MOVEMENT_SPEED` 属性包 |
+| `speed` | ✅ FOV 展宽（原生 26.1.2） | 假玩家 `MOVEMENT_SPEED` 属性包 |
+| `regeneration` / `resistance` / `absorption` 等 | 无画面 | 原本就没有屏幕渲染，只影响状态 |
+| 水下/着火/方块贴脸 | ❌ | `ScreenEffectRenderer` 对旁观者直接跳过 |
+| 全屏渐变/黑场 | ❌ | 原版没有对应协议包 |
+
+`blindness` 是“雾 + 天空压暗”，不是全屏纯黑渐变；`darkness` 也不是无缝黑场。需要真正的淡入淡出时，仍然只能用标题/资源包/客户端 mod 或后期。
+
+## darkness 不是 blindness
+
+`darkness` 和 `blindness` 在客户端都会压暗天空、加近雾，所以看起来很像；但代码里没有把 darkness 映射成 blindness：
+
+- `TrackParser` / `EditorManager` 把 `darkness` 解析为 `minecraft:darkness`；
+- `PacketCameraView#cameraPotion` 把 `darkness` 映射为 `PotionTypes.DARKNESS`；
+- `EffectSpec` 只把 `spec.type()` 加到真实玩家，不存在隐式添加 `blindness` 的路径。
+
+验证方法：播放只含 darkness 的轨道后执行 `/data get entity @s active_effects`，结果应只有 `minecraft:darkness`；如果同时出现 `blindness`，它来自另一条显式 `blindness` 步骤、之前的残留效果或外部 `/effect`，不是 darkness 生成的。
+
+如果 HUD 同时出现 **`失明 ∞`** 和 **`黑暗`**，先检查：
+
+- 编辑器 → 轨道概览 → **入场效果**；
+- 或 `/zc info <轨道>` 的 **入场效果** 行；
+- 或 `tracks.yml` 的 `entry-effects`。
+
+`entry-effects` 里如果有一条 `blindness` 且没有写 `duration`，它会按“持续到轨道结束”处理；只移除 darkness 不会移除这条 blindness。需要给它设置有限 `duration`，或另加一个 `action: remove` 的 blindness 步骤。已经存在的无限 blindness 可以用 `/effect clear @s` 清掉一次。
+
+两个容易误判为“没生效/没失效”的点：
+
+- **淡入/淡出约 22 tick（约 1.1 秒）**。`darkness` 的 `MobEffect` 设置了 blend duration；短于这个时长的效果只会部分变暗，移除后也会继续淡出一段时间。
+- **duration 0 表示持续到被移除或轨道结束**。如果只写 `effect: darkness` 而不写 `duration`，它不会自动在几秒后消失；需要另加一个 `action: remove` 步骤，或设置有限 `duration`。
+
+另外，效果生命周期做了两层保护：附身时重放 entry-effects 会跳过已经过期的项；每 tick 还会检查真实玩家是否仍有该效果，若玩家被 `/effect clear`、死亡或效果被外部移除，会立刻移除假玩家上的对应效果，避免雾残留。
+
+## 为什么只给盔甲架发效果没用
 
 - `LivingEntity#onEffectAdded` / `#onEffectUpdated` / `#onEffectsRemoved` 只把 `ClientboundUpdateMobEffectPacket` 发给**乘客**（`sendEffectToPassengers`）；`ServerEntity#sendPairingData` 不包含效果实例。
 - `setSpectatorTarget(armorStand)` 只是客户端相机目标，不是骑乘关系，旁观者不在盔甲架的乘客列表里。
-- 因此旁观者客户端的盔甲架 `activeEffects` 是空的；即使服务端给盔甲架 `addPotionEffect`，`Camera` / `FogRenderer` 也读不到。
+- 因此即使服务端给盔甲架 `addPotionEffect`，旁观者客户端的盔甲架 `activeEffects` 仍是空的。
+- 假玩家方案绕开了这个问题：效果包直接发给客户端假玩家的 entity id，客户端把效果加到 `RemotePlayer` 上。
 
-## 为什么“有时看起来又是对的”
+## 没有 PacketEvents 时的回退
 
-- **自由旁观**（`/gamemode spectator` 后不 `spectate` 任何实体）：`camera.entity()` 回落到玩家自己，所以 `blindness`、`slowness` 等会正常渲染；只有水下/着火/方块遮脸被旁观者逻辑跳过。
-- **附身到盔甲架**：`camera.entity()` 变成盔甲架，上述依赖镜头实体的效果立刻失效。
-- 附身到另一个**玩家**时，FOV 读的是那个玩家的移动速度属性，而不是旁观者自己的效果；失明雾仍依赖该玩家的效果实例，而效果包不会发给旁观者，所以也不完整。
+PacketEvents 是软依赖。未安装、API 未初始化或假玩家生成失败时：
 
-这解释了“旁观者附身状态下药水效果渲染很奇怪”：不是随机，而是不同渲染点读不同实体。
+- 服务端盔甲架镜头继续工作；
+- 客户端 Camera 是盔甲架，FOV 恒为 1.0；
+- `nausea` 完整，`darkness` 部分（亮度/脉动，缺雾/天空），`night_vision` 大部分（亮度，缺雾色）；
+- `blindness`、`slowness`、`speed` 没有画面效果。
+
+回退不会阻止轨道播放；控制台会说明当前使用的是盔甲架镜头。具体提示：
+
+- 启动：WARN `PacketEvents not installed; fake-player camera disabled...`；
+- 播放含镜头相关效果的轨道：聊天栏提示一次，控制台按轨道 id 只 WARN 一次；
+- `/zc info <轨道>`：显示“镜头模式: 假玩家 (PacketEvents)”或“镜头模式: 盔甲架回退”；
+- 编辑器轨道概览、效果选择器和效果表单：显示“盔甲架回退模式”及受影响的 FOV/失明雾；
+- `/zc edit effect add ...`：追加成功后，聊天栏追加同样的提示。
+
+假玩家镜头创建失败（PacketEvents 存在但发包失败）时，控制台保留异常堆栈，玩家聊天栏收到 `camera.fake-camera-failed` 并回退到盔甲架。
 
 ## 这是不是 Minecraft 的 bug？
 
-从代码看，它更像**三个独立设计在旁观者相机上撞出的边界情况**，而不是一个单点 bug：
+从代码看，它更像**三个独立设计在旁观者相机上撞出的边界情况**：
 
-1. 屏幕类效果（`nausea`、HUD、`darkness`/`night_vision` 的亮度）按本地玩家读取。
-2. 环境/相机类效果（FOV、`blindness`/`darkness` 的雾和天空）按 `camera.entity()` 读取；这是为了让第一人称、第三人称和骑乘共用同一套 `Camera` 代码。
+1. 屏幕类效果（`nausea`、HUD、`darkness`/`night_vision` 的亮度）按本地玩家读取；
+2. 环境/相机类效果（FOV、雾、天空）按 `camera.entity()` 读取；
 3. 非玩家实体的效果包只发给乘客，而不是所有观察者。
 
-正常游戏里 `camera.entity()` 就是玩家自己（或玩家正在骑的载具，而效果仍按玩家读），1/2/3 不会冲突。旁观者把 `camera.entity()` 换成另一个实体后，三者就对不上了。
-
-所以：从玩家视角可以把它当 bug 反馈；从实现看，它属于 spectator 相机没有定义清楚“效果归属”的未处理组合。部分限制是刻意的（`ScreenEffectRenderer` 明确跳过旁观者的水下/着火，HUD 也按旁观者隐藏），但“同一个效果一半读玩家、一半读镜头实体”这一点确实不一致。它不造成崩溃或服务端状态错误，也没有证据表明是 26.1.2 新引入的回归。
-
-## 骑乘能解决什么
-
-先澄清一个关键点：**Camera 由 `ClientboundSetCameraPacket`（Bukkit 的 `setSpectatorTarget`）决定，不由载具决定。** 骑上实体不会自动把 Camera 变成玩家。
-
-| 做法 | Camera 实体 | 效果 | 镜头旋转 |
-| --- | --- | --- | --- |
-| 保持现状：spectate 盔甲架 | 盔甲架 | 只有玩家类效果 | 服务端锁定，平滑 |
-| 骑别的实体，但保留 spectator target | 盔甲架 | 和现状一样 | 服务端锁定 |
-| 骑别的实体，并清掉 spectator target | **玩家** | 玩家类效果全部可用（`blindness`/`slowness`/`nausea`/`darkness`/`night_vision`） | **客户端控制，无法像盔甲架那样锁定** |
-| 骑**盔甲架本身**，保留 spectator target | 盔甲架 | 盔甲架的效果包会发给乘客 → `blindness`/`darkness`/`night_vision` 的雾/天空可用；FOV 仍不行 | 服务端锁定 |
-
-补充：
-
-- 普通旁观者右键**不能**上坐骑：`Player#interactOn` 对 spectator 直接返回，`ArmorStand#interact` 也只返回成功而不调用 `startRiding`。
-- 服务端可以强制：原版 `/ride <player> mount <entity>` 用的是 `startRiding(entity, force=true)`，会绕过 `canRide`/`canAddPassenger`；插件也可以走 NMS 的 `startRiding(..., true)`。Bukkit `Entity#addPassenger` 是否带 force 取决于服务端实现，需要实测；失败时用 NMS。
-- **骑盔甲架 + 保留 spectator target** 是一个有意思的纯服务端折中：玩家成为盔甲架的乘客后，`LivingEntity#sendEffectToPassengers` 会把盔甲架的效果包发给玩家。这样 `blindness` 的雾/天空、`darkness`/`night_vision` 的雾都能工作，而镜头仍由盔甲架控制、保持平滑。缺点是它属于利用载具同步的 hack：要处理潜行/下马、镜头实体删除、Folia 跨 region、反作弊和效果包时序（效果要在上马**之后**施加，否则要等 600 tick 的刷新）。
-- **Camera = 玩家**时虽然效果全了，但视角旋转由客户端鼠标控制，服务端只能每 tick 改 rotation，无法像当前盔甲架那样锁住镜头；所以只适合 `hold`/固定机位，或者你愿意接受玩家自由看。
-
-## 对镜头设计的直接影响
-
-在当前的盔甲架 + 旁观者模式下：
-
-- `blindness` 不能用来遮硬切，也不会在入场时压黑画面；
-- `slowness` / `speed` 不能做 FOV 变焦；
-- `darkness` 只能做“世界变暗/脉动”，天空和雾不会变；
-- `night_vision` 能提亮画面，但雾色不变；
-- 水下、着火、方块贴脸等屏幕叠加层对旁观者不可用；南瓜头/细雪在 `Gui` 里另有路径，但不是药水效果；
-- 受击/死亡倾斜、走路摇晃、暗角等读镜头实体，盔甲架没有，天然不会出现（对电影镜头反而是好事）。
-
-## 可选方案
-
-1. **保留附身，接受限制**：只用 `nausea` / `darkness` / `night_vision`；冲击/手持感用 `sway` 或路径直接做，不依赖药水；黑场和变焦交给客户端 mod/资源包或后期。
-2. **效果镜头改用自由旁观**：不设 spectator target，镜头实体就是玩家；`blindness`/`slowness` 可用，但玩家位置只能靠服务端传送，失去实体插值的平滑度，适合静止/`hold` 或本来就被黑场遮住的切换。
-3. **NMS 注入盔甲架效果包**：把 `ClientboundUpdateMobEffectPacket` 直接发给旁观者，让客户端认为盔甲架有 `blindness`/`darkness`/`night_vision`。这样雾和天空能工作，但 FOV 仍然不行（盔甲架不是 `AbstractClientPlayer`），且依赖 26.1.2 映射，版本升级会坏。目前未实现。
-4. **骑盔甲架，让效果包发给乘客**：不依赖 NMS，保留服务端锁定的镜头；能让 `blindness`/`darkness`/`night_vision` 的雾/天空工作，但 FOV 仍然不行，且要处理上马/下马和 Folia/反作弊的边界。目前未实现。
-5. **真正的 FOV / 全屏渐变**：需要镜头实体是玩家（真实玩家/NPC）或客户端 mod/光影；纯服务端协议没有 FOV 包，也没有全屏黑场包。
+正常游戏里 `camera.entity()` 就是玩家自己（或玩家正在骑的载具，效果仍按玩家读），三者不会冲突。旁观者把 `camera.entity()` 换成另一个实体后，三者就对不上了。部分限制是刻意的（`ScreenEffectRenderer` 明确跳过旁观者的水下/着火），但“同一个效果一半读玩家、一半读镜头实体”确实不一致。它不造成崩溃或服务端状态错误。
 
 ## 游戏内验证
 
-自由旁观：
+先确认启动日志出现：
 
 ```text
-/gamemode spectator @s
-/effect give @s minecraft:blindness 30 0 true
+[ZthCameraRail] PacketEvents fake-player camera enabled.
 ```
 
-附身盔甲架：
+用编辑器给一条轨道加效果步骤：
 
 ```text
-/summon armor_stand ~ ~ ~ {Marker:1b,Invisible:1b,NoGravity:1b}
-/spectate @e[type=armor_stand,limit=1,sort=nearest] @s
-/effect give @s minecraft:blindness 30 0 true
+/zc edit effect add blindness
+/zc edit effect add slowness 1
+/zc edit effect add darkness
+/zc edit effect add night_vision
+/zc edit effect add nausea
 ```
 
-预期：自由旁观时画面起雾/压暗；附身后同一效果不再改变画面。把 `blindness` 换成 `nausea` 应仍能看到视角摇晃，换成 `slowness` 应只在自由旁观时收窄 FOV。
+播放后预期：
 
-骑盔甲架、让效果包发给乘客：
+- `blindness`：雾变近、天空压暗；
+- `slowness 1`：FOV 平滑收窄到约 0.85；
+- `darkness`：画面变暗、天空/雾变暗；
+- `night_vision`：亮度提升、雾色变亮；
+- `nausea`：镜头摇晃；
+- 移除效果或结束轨道后，FOV/雾/天空恢复。
 
-```text
-/summon armor_stand ~ ~ ~ {Marker:1b,Invisible:1b,NoGravity:1b,Tags:["cam"]}
-/ride <player> mount @e[type=armor_stand,tag=cam,limit=1]
-/spectate @e[type=armor_stand,tag=cam,limit=1] <player>
-/effect give @e[type=armor_stand,tag=cam,limit=1] minecraft:blindness 30 0 true
-```
+服务端仍可用 `/zc info` 观察轨道状态；不要在假玩家镜头下用 `/effect give` 给盔甲架来验证，效果包不会发给旁观者。
 
-预期：镜头仍然是盔甲架视角，但画面会出现失明雾/压暗；`slowness` 仍不会改变 FOV。注意效果要在上马之后施加，否则乘客可能收不到首次效果包。
+## 历史方案对比
+
+在假玩家方案之前，曾评估过：
+
+- **给盔甲架注入 NMS 效果包**：能让雾/天空工作，但 FOV 仍不行，且依赖 26.1.2 映射；
+- **让旁观者骑盔甲架**：可以利用乘客效果同步，但 FOV 仍不行，且要处理上马/下马、Folia 和反作弊；
+- **真正的 NPC/真实玩家相机**：FOV 可以，但需要服务端假连接或 Citizens 一类方案，成本高。
+
+现在的假玩家方案是**客户端实体 + 服务端盔甲架锚点**的折中：不需要服务端 NPC，不需要改 `ServerPlayer#tick`，同时拿到了 FOV 和相机实体效果。

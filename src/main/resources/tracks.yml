@@ -28,8 +28,9 @@ tracks:
     # 玩家实体是否跟随镜头区块加载
     follow: true
     # 进入镜头前施加的效果，用来压暗第一次硬切；之后在步骤中移除。
-    # 附身盔甲架时只有 darkness/nausea/night_vision 等少数效果有画面；
-    # blindness/slowness 不会生效，见 docs/spectator-effects.md。
+    # 安装 PacketEvents 并启用假玩家镜头后，blindness/darkness/night_vision 的雾、
+    # 以及 slowness/speed 的 FOV 都会生效；未安装时只有 darkness/nausea/night_vision
+    # 等少数效果有画面。见 docs/spectator-effects.md。
     entry-effects:
       - effect: darkness
     steps:

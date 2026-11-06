@@ -4,6 +4,7 @@ main: net.ria.zth.camerarail.ZthCameraRailPlugin
 api-version: '26.1.2'
 folia-supported: true
 load: POSTWORLD
+softdepend: [packetevents]
 description: 轻量的旁观者镜头轨道与过场动画，支持 Paper/Folia。
 authors: [RIA]
 commands:

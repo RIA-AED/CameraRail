@@ -5,6 +5,7 @@ import net.ria.zth.camerarail.api.EndReason;
 import net.ria.zth.camerarail.api.PlaybackInfo;
 import net.ria.zth.camerarail.model.CameraTrack;
 import net.ria.zth.camerarail.model.CameraStep;
+import net.ria.zth.camerarail.model.EffectSpec;
 import net.ria.zth.camerarail.model.Pose;
 import net.ria.zth.camerarail.model.Step;
 import net.ria.zth.camerarail.model.SwayPreset;
@@ -57,11 +58,22 @@ final class Session {
     final AtomicInteger queuedAdvances = new AtomicInteger();
     final Queue<AdvanceRequest> advances = new ConcurrentLinkedQueue<>();
     final Map<PotionEffectType, PotionEffect> originalEffects = new LinkedHashMap<>();
+    /**
+     * Effects that are currently active on the client-side camera entity. Effects are
+     * applied to the player as well; this map lets a camera view created later replay
+     * them, and makes effect removal order-independent.
+     */
+    final Map<PotionEffectType, EffectSpec> cameraEffects = new ConcurrentHashMap<>();
+    /** Absolute tick at which each fake-camera effect expires; Long.MAX_VALUE = infinite. */
+    final Map<PotionEffectType, Long> cameraEffectExpiry = new ConcurrentHashMap<>();
     /** Chunks kept loaded for the camera entity (packed chunk coordinates). */
     final Set<Long> cameraChunks = ConcurrentHashMap.newKeySet();
 
     volatile PlayerStateSnapshot original;
     volatile ArmorStand camera;
+    /** Client-only player camera; null when PacketEvents is absent or spawn failed. */
+    volatile CameraOverlay.CameraView fakeCamera;
+    volatile boolean fakeCameraFailureNotified;
     volatile ScheduledTask tickTask;
     volatile boolean startEventFired;
     volatile boolean internalModeChange;
@@ -134,6 +146,17 @@ final class Session {
 
     boolean active() {
         return !ending.get() && !closed.get() && player.isOnline();
+    }
+
+    /**
+     * Whether the camera enters at the track's own start pose ({@link #initialPose} may still
+     * be the end pose of earlier steps). Entry effects are tied to the hard cut from the
+     * player's body to {@code track.start()}; a preview that begins at a later step spawns
+     * the camera at the end pose of the preceding steps, which is not an entry moment in
+     * real playback, so the editor's "预览此步" must not trigger them.
+     */
+    boolean appliesEntryEffects() {
+        return startIndex == 0;
     }
 
     Optional<PlaybackInfo> info() {

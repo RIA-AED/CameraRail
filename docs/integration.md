@@ -1,6 +1,6 @@
 # 与其他插件的集成
 
-ZthCameraRail 不依赖 AuthMe、小游戏插件或脚本引擎。它只暴露三样东西：
+ZthCameraRail 不依赖 AuthMe、小游戏插件或脚本引擎。假玩家镜头需要可选的 PacketEvents，但未安装时只会回退到盔甲架镜头，不影响下面的 API、事件或命令。它只暴露三样东西：
 
 1. Bukkit `ServicesManager` 里的 `CameraService`。
 2. 三个事件。

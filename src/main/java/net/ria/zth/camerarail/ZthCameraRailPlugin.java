@@ -10,6 +10,8 @@ import net.ria.zth.camerarail.editor.EditorUI;
 import net.ria.zth.camerarail.listener.CameraListener;
 import net.ria.zth.camerarail.message.Messages;
 import net.ria.zth.camerarail.runtime.CameraEngine;
+import net.ria.zth.camerarail.runtime.CameraOverlay;
+import net.ria.zth.camerarail.runtime.packet.PacketCameraOverlay;
 import net.ria.zth.camerarail.storage.RecoveryStore;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.ServicePriority;
@@ -26,6 +28,7 @@ public final class ZthCameraRailPlugin extends JavaPlugin {
     private volatile Messages messages;
     private TrackRepository tracks;
     private RecoveryStore recovery;
+    private CameraOverlay cameraOverlay;
     private CameraEngine engine;
     private EditorManager editors;
     private EditorUI editorUi;
@@ -49,8 +52,10 @@ public final class ZthCameraRailPlugin extends JavaPlugin {
         tracks = new TrackRepository(tracksFile, config, getLogger());
         tracks.loadInitial();
         recovery = new RecoveryStore(getDataFolder(), config, getLogger());
+        cameraOverlay = createCameraOverlay();
 
-        engine = new CameraEngine(this, tracks, recovery, () -> config, () -> messages, this::reloadEverything);
+        engine = new CameraEngine(this, tracks, recovery, () -> config, () -> messages,
+                this::reloadEverything, cameraOverlay);
         editors = new EditorManager(this, tracks, engine, () -> config, () -> messages);
         editorUi = new EditorUI(this, editors, tracks, () -> config, () -> messages);
         command = new CameraCommand(engine, tracks, editors, editorUi, () -> config, () -> messages,
@@ -75,6 +80,9 @@ public final class ZthCameraRailPlugin extends JavaPlugin {
     public void onDisable() {
         if (engine != null) {
             engine.shutdown();
+        }
+        if (cameraOverlay != null) {
+            cameraOverlay.close();
         }
         try {
             getServer().getServicesManager().unregister(CameraService.class, engine);
@@ -110,6 +118,29 @@ public final class ZthCameraRailPlugin extends JavaPlugin {
         } catch (RuntimeException exception) {
             getLogger().log(Level.SEVERE, "Could not reload ZthCameraRail", exception);
             return -1;
+        }
+    }
+
+    /**
+     * The fake-player camera is an optional overlay. PacketEvents is a soft dependency:
+     * without it the plugin still runs, but falls back to the armor-stand camera and loses
+     * the FOV/blindness behaviour that needs a player camera entity.
+     */
+    private CameraOverlay createCameraOverlay() {
+        if (getServer().getPluginManager().getPlugin("packetevents") == null) {
+            getLogger().warning("PacketEvents not installed; fake-player camera disabled."
+                    + " FOV and blindness/slowness/speed camera effects are unavailable;"
+                    + " using the armor-stand camera. Install PacketEvents 2.14.0+ to enable them.");
+            return null;
+        }
+        try {
+            CameraOverlay overlay = new PacketCameraOverlay(this);
+            getLogger().info("PacketEvents fake-player camera enabled.");
+            return overlay;
+        } catch (RuntimeException | LinkageError exception) {
+            getLogger().log(Level.WARNING, "PacketEvents is installed but the fake-player camera "
+                    + "could not start; using the armor-stand camera", exception);
+            return null;
         }
     }
 

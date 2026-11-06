@@ -10,6 +10,7 @@ import net.ria.zth.camerarail.config.RailConfig;
 import net.ria.zth.camerarail.config.TrackParser;
 import net.ria.zth.camerarail.config.TrackRepository;
 import net.ria.zth.camerarail.message.Messages;
+import net.ria.zth.camerarail.model.CameraEffects;
 import net.ria.zth.camerarail.model.CameraStep;
 import net.ria.zth.camerarail.model.CameraTrack;
 import net.ria.zth.camerarail.model.CutStep;
@@ -76,6 +77,11 @@ public final class EditorManager implements Listener {
 
     public boolean hasEditors() {
         return !editors.isEmpty();
+    }
+
+    /** Whether the editor should promise fake-camera-only FOV/effect behaviour. */
+    public boolean fakeCameraAvailable() {
+        return engine.fakeCameraAvailable();
     }
 
     public boolean isEditing(Player player) {
@@ -391,7 +397,14 @@ public final class EditorManager implements Listener {
         int safeAmplifier = Math.max(0, Math.min(255, amplifier));
         int safeDuration = Math.max(0, Math.min(config.get().maxTrackTicks(), duration));
         EffectSpec spec = new EffectSpec(type, type.getKey().toString(), action, safeAmplifier, safeDuration);
+        int before = session.draft.steps().size();
         append(player, session, new EffectStep(spec), "editor.effect-added");
+        if (session.draft.steps().size() > before
+                && action == EffectAction.ADD
+                && CameraEffects.isCameraDependent(spec)
+                && !fakeCameraAvailable()) {
+            messages.get().send(player, "camera.fake-camera-unavailable");
+        }
     }
 
     public void addTitle(Player player, int fadeIn, int stay, int fadeOut, String text) {
