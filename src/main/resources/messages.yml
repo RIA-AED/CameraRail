@@ -1,4 +1,4 @@
-# ZthCameraRail 游戏内消息（MiniMessage）
+# CameraRail 游戏内消息（MiniMessage）
 # 支持 <white>、<gray>、<gradient:...> 等 Adventure 标签。
 prefix: "<dark_gray>[<gray>镜头<dark_gray>]<reset> "
 
@@ -66,7 +66,7 @@ manage:
 
 editor:
   already: "<gray>你已经在编辑轨道 <white>{track}</white>."
-  not-editing: "<gray>你当前不在编辑模式. 使用 <white>/zth-camera edit open <id></white>."
+  not-editing: "<gray>你当前不在编辑模式. 使用 <white>/camerarail edit open <id></white>."
   opened: "<gray>正在编辑 <white>{track}</white>. 当前世界 <white>{world}</white>."
   created: "<gray>已创建轨道 <white>{track}</white>，起点为你当前视角."
   world-mismatch: "<gray>请先前往轨道所在世界 <white>{world}</white>."
@@ -77,7 +77,7 @@ editor:
   start-set: "<gray>起点已更新为当前位置."
   exit-set: "<gray>退出点已更新为当前脚下位置."
   exit-mode-set: "<gray>退出点已改为 <white>{mode}</white>."
-  exit-mode-custom: "<gray>自定义退出点请用 <white>/zth-camera edit exit</white> 取当前脚下位置."
+  exit-mode-custom: "<gray>自定义退出点请用 <white>/camerarail edit exit</white> 取当前脚下位置."
   added: "<gray>已追加步骤 <white>{index}</white>: {summary}"
   updated: "<gray>已更新步骤 <white>{index}</white>: {summary}"
   removed: "<gray>已删除步骤 <white>{index}</white>."
@@ -90,7 +90,7 @@ editor:
   path-point-added: "<gray>已向路径追加一个路径点，共 <white>{count}</white> 个."
   path-point-removed: "<gray>已删除路径最后一个点，剩余 <white>{count}</white> 个."
   path-point-min: "<gray>路径至少需要保留一个点."
-  path-created: "<gray>已创建路径步骤，请继续用 <white>/zth-camera edit point</white> 添加路径点."
+  path-created: "<gray>已创建路径步骤，请继续用 <white>/camerarail edit point</white> 添加路径点."
   path-needs-points: "<gray>路径步骤至少需要两个路径点才能预览."
   saved: "<gray>已保存轨道 <white>{track}</white>."
   save-failed: "<red>保存失败，请查看控制台."
@@ -115,11 +115,11 @@ editor:
   hold-added: "<gray>已追加停留步骤: <white>{ticks}t</white>."
   cut-added: "<gray>已追加快切步骤."
   path-added: "<gray>已追加路径步骤."
-  display-usage: "<gray>用法: <white>/zth-camera edit display <名称></white>."
-  effect-usage: "<gray>用法: <white>/zth-camera edit effect <add|remove> <效果> [等级] [时长]</white>."
-  title-usage: "<gray>用法: <white>/zth-camera edit title <fade-in> <stay> <fade-out> <标题>|<副标题></white>."
-  wait-usage: "<gray>用法: <white>/zth-camera edit wait <信号> [超时]</white>."
-  select-usage: "<gray>用法: <white>/zth-camera edit select <索引></white>."
+  display-usage: "<gray>用法: <white>/camerarail edit display <名称></white>."
+  effect-usage: "<gray>用法: <white>/camerarail edit effect <add|remove> <效果> [等级] [时长]</white>."
+  title-usage: "<gray>用法: <white>/camerarail edit title <fade-in> <stay> <fade-out> <标题>|<副标题></white>."
+  wait-usage: "<gray>用法: <white>/camerarail edit wait <信号> [超时]</white>."
+  select-usage: "<gray>用法: <white>/camerarail edit select <索引></white>."
   no-permission: "<gray>你没有权限编辑轨道."
   duplicate-signal: "<gray>等待信号 <white>{signal}</white> 已存在."
   invalid-effect: "<gray>未知的药水效果 <white>{effect}</white>. 可以使用 blindness、darkness、nausea、night_vision、slowness、speed 或带命名空间的 id."
@@ -130,11 +130,11 @@ editor:
   preview-ended: "<gray>预览结束."
   preview-failed: "<gray>预览启动失败."
 
-# /zth-camera help 与 /zth-camera edit help 的文字。
+# /camerarail help 与 /camerarail edit help 的文字。
 # 排版（缩进、对齐、点击填入）由插件绘制；这里提供文字。summary、标签与页脚支持 MiniMessage，
 # detail 为纯文本，会按聊天宽度自动换行。
 help:
-  title: "<gray>ZthCameraRail</gray> <dark_gray>·</dark_gray> <white>{scope}</white> <dark_gray>·</dark_gray> <gray>{command}</gray>"
+  title: "<gray>CameraRail</gray> <dark_gray>·</dark_gray> <white>{scope}</white> <dark_gray>·</dark_gray> <gray>{command}</gray>"
   scope:
     root: "镜头轨道"
     editor: "轨道编辑器"

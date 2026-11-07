@@ -240,7 +240,7 @@ private boolean isLocatorBarEnabledFor(net.minecraft.server.level.ServerPlayer);
 - 原版没有把 `WAYPOINT_RECEIVE_RANGE` 降到 0 的内容（`Player` 只给它 `6.0E7` 默认值；潜行修正作用于 `WAYPOINT_TRANSMIT_RANGE`），所以“receive 归零 = 关定位条”是原版逻辑自然产生的钩子；Mojang 未承诺这一语义长期稳定，升级时要回归验证。
 
 ```java
-package net.ria.zth.camerarail.runtime;
+package red.ria.camerarail.runtime;
 
 import io.papermc.paper.threadedregions.scheduler.EntityScheduler;
 import org.bukkit.NamespacedKey;
@@ -417,8 +417,8 @@ ClientWaypointManager.updateWaypoint(TrackedWaypoint wp):
 | --- | --- | --- |
 | `/gamerule locator_bar` | `locator_bar 目前为：true` | gamerule 存在且默认开；`/gamerule locatorBar` 报未知参数，**id 是 snake_case** |
 | `/attribute A_Magma_Block minecraft:waypoint_receive_range base set 12345` → 断线重连 → `... get` | `12345.0` | **base 值会写进 playerdata**，重登/崩溃后仍保留 → 不能用 `setBaseValue(0)` 做“临时隐藏” |
-| `/attribute A_Magma_Block minecraft:waypoint_receive_range modifier add zth:hide -1 add_multiplied_total` → `... get` | `0.0` | `MULTIPLY_SCALAR_1(-1)` 的结果确实是 0；26.1.2 命令的 operation 名是 `add_multiplied_total`（不是枚举名 `multiply_scalar_1`） |
-| `/attribute ... modifier remove zth:hide` + `base set 60000000` → `... get` | `60000000.0` | 可完整还原 |
+| `/attribute A_Magma_Block minecraft:waypoint_receive_range modifier add camerarail:hide -1 add_multiplied_total` → `... get` | `0.0` | `MULTIPLY_SCALAR_1(-1)` 的结果确实是 0；26.1.2 命令的 operation 名是 `add_multiplied_total`（不是枚举名 `multiply_scalar_1`） |
+| `/attribute ... modifier remove camerarail:hide` + `base set 60000000` → `... get` | `60000000.0` | 可完整还原 |
 
 补充说明：
 
@@ -497,7 +497,7 @@ javap -p -c  -classpath $cl net.minecraft.client.multiplayer.MultiPlayerGameMode
 ```text
 /gamerule locator_bar                                                    # -> true（id 为 snake_case）
 /attribute <player> minecraft:waypoint_receive_range base set 12345      # 断线重连后仍为 12345.0（落盘）
-/attribute <player> minecraft:waypoint_receive_range modifier add zth:hide -1 add_multiplied_total
+/attribute <player> minecraft:waypoint_receive_range modifier add camerarail:hide -1 add_multiplied_total
 /attribute <player> minecraft:waypoint_receive_range get                 # -> 0.0
 ```
 
@@ -528,12 +528,12 @@ javap -p -c  -classpath $cl net.minecraft.client.multiplayer.MultiPlayerGameMode
 
 ## 9. 本插件的实现（已落地，2026-11-07）
 
-本插件按 §5.1 的方案 A 实现，代码在 `net.ria.zth.camerarail.runtime.LocatorBarHider`，由 `CameraEngine` 管理整个生命周期：
+本插件按 §5.1 的方案 A 实现，代码在 `red.ria.camerarail.runtime.LocatorBarHider`，由 `CameraEngine` 管理整个生命周期：
 
 | 时机 | 行为 |
 | --- | --- |
 | `CameraEngine.attach()`：旁观相机真正锁定玩家后 | 调用 `syncLocatorBar`，按配置加 transient `MULTIPLY_SCALAR_1(-1)` 修正符（`session.hide-locator-bar: true` 时） |
-| 镜头 tick 每 20 tick | 在玩家调度器上复查：修正符被第三方清掉时补回；`/zc reload` 把配置改成 false 时移除 |
+| 镜头 tick 每 20 tick | 在玩家调度器上复查：修正符被第三方清掉时补回；`/camerarail reload` 把配置改成 false 时移除 |
 | `restorePlayer()` 的 `finally` | 无条件移除本插件的修正符（含 `original == null` 早退与异常路径） |
 | `handleQuit()` / `recoverOnJoin()` / `applyRecovery()` | 兜底移除；重登后 `applyRecovery` 也会清一次（正常崩溃/重登时 transient 修正符已随实体消失） |
 | `shutdown()`（插件禁用/关服） | Paper 主线程直接移除；Folia 在玩家调度器上尝试移除（Folia 不支持 `/reload`，正常关服时实体即将消失） |
@@ -545,6 +545,6 @@ javap -p -c  -classpath $cl net.minecraft.client.multiplayer.MultiPlayerGameMode
 - transient 修正符不落盘：崩溃、杀进程、断线重连都不会残留；服务端不提供该属性时只记录一次 WARN，镜头继续播放。
 - **只影响被拍摄玩家**：不修改 gamerule、不操作其他玩家的属性。隐藏期间该玩家也不再作为其他玩家的 waypoint 源；但播放时该玩家是旁观者，原版 `doesSourceIgnoreReceiver` 本来就不会把旁观者显示给其他玩家，所以实际无额外差异。
 - 与假玩家镜头兼容：隐藏判断只看 `minecraft.player` 连接上的 waypoint 表，与相机实体是盔甲架还是假玩家无关。
-- 配置：`session.hide-locator-bar`（默认 `true`），`/zc reload` 后最多 20 tick 生效；只影响“隐藏”行为，不影响已加载的轨道。
+- 配置：`session.hide-locator-bar`（默认 `true`），`/camerarail reload` 后最多 20 tick 生效；只影响“隐藏”行为，不影响已加载的轨道。
 
 验收：见 [testing.md](testing.md) 第 12 项；手动命令见本文 §5.5 与 §5.6。

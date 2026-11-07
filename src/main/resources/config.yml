@@ -1,4 +1,4 @@
-# ZthCameraRail 全局配置
+# CameraRail 全局配置
 # 时间单位均为 tick，20 tick = 1 秒。
 
 schema-version: 1
@@ -21,7 +21,7 @@ session:
   # wait 步骤的默认超时，0 表示永不超时。超时后会结束镜头并恢复玩家原位置
   wait-timeout: 6000
   # 是否允许玩家按 Shift 退出真实播放（play）。
-  # 预览（UI 预览和 /zc preview）总是允许 Shift 结束，不受这个开关影响。
+  # 预览（UI 预览和 /camerarail preview）总是允许 Shift 结束，不受这个开关影响。
   # 默认关闭，避免误触。
   allow-sneak-exit: false
   # 播放期间隐藏被拍摄玩家的原版定位条（locator bar）。

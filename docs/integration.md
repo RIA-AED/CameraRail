@@ -1,20 +1,20 @@
 # 与其他插件的集成
 
-ZthCameraRail 不依赖 AuthMe、小游戏插件或脚本引擎。假玩家镜头需要可选的 PacketEvents，但未安装时只会回退到盔甲架镜头，不影响下面的 API、事件或命令。它只暴露三样东西：
+CameraRail 不依赖 AuthMe、小游戏插件或脚本引擎。假玩家镜头需要可选的 PacketEvents，但未安装时只会回退到盔甲架镜头，不影响下面的 API、事件或命令。它只暴露三样东西：
 
 1. Bukkit `ServicesManager` 里的 `CameraService`。
 2. 三个事件。
-3. 命令：`/zth-camera play`、`/zth-camera advance`、`/zth-camera stop`。
+3. 命令：`/camerarail play`、`/camerarail advance`、`/camerarail stop`。
 
 ## 获取服务
 
 ```java
-import net.ria.zth.camerarail.api.CameraService;
+import red.ria.camerarail.api.CameraService;
 import org.bukkit.Bukkit;
 
 CameraService cameras = Bukkit.getServicesManager().load(CameraService.class);
 if (cameras == null) {
-    getLogger().warning("ZthCameraRail is not installed");
+    getLogger().warning("CameraRail is not installed");
     return;
 }
 ```
@@ -45,7 +45,7 @@ public void onAuthmeLogin(SomeAuthMeLoginEvent event) {
 }
 ```
 
-> AuthMe 的类名/事件名会随版本变化，上面的 `SomeAuthMeLoginEvent` 只是占位。请以你实际安装的 AuthMe 版本 API 为准，或让脚本引擎执行命令 `/zc advance authme:authenticated <player>`。
+> AuthMe 的类名/事件名会随版本变化，上面的 `SomeAuthMeLoginEvent` 只是占位。请以你实际安装的 AuthMe 版本 API 为准，或让脚本引擎执行命令 `/camerarail advance authme:authenticated <player>`。
 
 ### 外部传送会把镜头交还给对方
 
@@ -91,7 +91,7 @@ arena_intro:
     - { type: hold, duration: 20 }
 ```
 
-小游戏插件负责实际传送、清空背包、倒计时；ZthCameraRail 只负责镜头。
+小游戏插件负责实际传送、清空背包、倒计时；CameraRail 只负责镜头。
 
 ## 提前信号
 
@@ -156,9 +156,9 @@ public void onCameraEnd(CameraTrackEndEvent event) {
 如果胶水层是脚本/控制台命令：
 
 ```text
-/zth-camera play login <player>
-/zth-camera advance authme:authenticated <player>
-/zth-camera stop <player>
+/camerarail play login <player>
+/camerarail advance authme:authenticated <player>
+/camerarail stop <player>
 ```
 
 控制台执行 `play` 时必须提供玩家名。`advance` 也支持 `*` 表示推进当前 wait。
@@ -175,12 +175,12 @@ public void onCameraEnd(CameraTrackEndEvent event) {
 
 因此：
 
-- 不要清理 `plugins/ZthCameraRail/recovery/` 下的文件，除非你明确要放弃恢复。
+- 不要清理 `plugins/CameraRail/recovery/` 下的文件，除非你明确要放弃恢复。
 - 如果玩家在镜头期间退出后又立即重连，会看到一条灰色的“已恢复”消息，并被传送回原位置。
 - 如果原世界没有加载，恢复会跳过传送并提示，但仍尽量恢复游戏模式。
 
 ## 关闭 / 重载
 
-- `/zth-camera reload` 在有人处于编辑器时会拒绝，避免覆盖正在编辑的草稿。
+- `/camerarail reload` 在有人处于编辑器时会拒绝，避免覆盖正在编辑的草稿。
 - 重载不会打断已经开始的播放；已有会话使用开始时的不可变轨道快照。
 - 插件禁用时会尽量恢复在线玩家的游戏模式和效果，并保留恢复文件供下次登录修复。

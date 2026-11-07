@@ -2,11 +2,11 @@
   <img src="docs/branding/hero.png" alt="CameraRail — 旁观者镜头轨道与过场动画（Paper / Folia）" width="100%">
 </p>
 
-# ZthCameraRail
+# CameraRail
 
-ZthCameraRail 是一个用于 Paper / Folia 的 Minecraft 摄像机轨道插件。播放时，玩家会被切换为旁观者，服务端用一个隐藏的盔甲架作为相机锚点；安装 PacketEvents 后，客户端还会通过一个只存在于该客户端的假玩家实体渲染镜头，从而获得真正的 FOV 与更完整的药水效果。镜头按 `tracks.yml` 中定义的路径移动、停留或等待外部信号；播放结束后，玩家按配置的落点返回。
+CameraRail 是一个用于 Paper / Folia 的 Minecraft 摄像机轨道插件。播放时，玩家会被切换为旁观者，服务端用一个隐藏的盔甲架作为相机锚点；安装 PacketEvents 后，客户端还会通过一个只存在于该客户端的假玩家实体渲染镜头，从而获得真正的 FOV 与更完整的药水效果。镜头按 `tracks.yml` 中定义的路径移动、停留或等待外部信号；播放结束后，玩家按配置的落点返回。
 
-插件只负责镜头本身。登录验证、小游戏流程、正式传送和流程状态切换由其他插件负责，它们可以通过 `CameraService`、事件或 `/zc` 命令与镜头播放配合。
+插件只负责镜头本身。登录验证、小游戏流程、正式传送和流程状态切换由其他插件负责，它们可以通过 `CameraService`、事件或 `/camerarail` 命令与镜头播放配合。
 
 ## 特性
 
@@ -36,10 +36,10 @@ ZthCameraRail 是一个用于 Paper / Folia 的 Minecraft 摄像机轨道插件�
 ## 安装
 
 1. 将 PacketEvents 2.14.0+ 的插件 jar 放入服务端 `plugins/` 目录（可选，但 FOV/失明雾需要它）。
-2. 构建或下载 `ZthCameraRail.jar`，放入同一 `plugins/` 目录。
+2. 构建或下载 `CameraRail-1.1.0.jar`，放入同一 `plugins/` 目录。
 3. 启动服务器，插件会生成默认配置。
-4. 编辑 `plugins/ZthCameraRail/tracks.yml`，或进入游戏执行 `/zc edit`。
-5. 执行 `/zc reload`，然后 `/zc play <轨道>` 预览。
+4. 编辑 `plugins/CameraRail/tracks.yml`，或进入游戏执行 `/camerarail edit`。
+5. 执行 `/camerarail reload`，然后 `/camerarail play <轨道>` 预览。
 
 首次启动会生成配置和轨道文件；`recovery/` 在第一次播放时创建。
 
@@ -48,12 +48,12 @@ ZthCameraRail 是一个用于 Paper / Folia 的 Minecraft 摄像机轨道插件�
 - 启动日志为 WARN：`PacketEvents not installed; fake-player camera disabled...`；
 - 播放使用 `blindness`/`slowness`/`speed` 等镜头相关效果的轨道时，聊天栏提示当前是盔甲架回退模式，控制台只对每条轨道警告一次；
 - 编辑器轨道概览显示“镜头模式: 盔甲架回退 · FOV/失明雾不可用”；
-- `/zc info <轨道>` 显示“镜头模式: 假玩家 (PacketEvents)”或“镜头模式: 盔甲架回退”；
+- `/camerarail info <轨道>` 显示“镜头模式: 假玩家 (PacketEvents)”或“镜头模式: 盔甲架回退”；
 - 效果选择器摘要与效果表单显示回退说明；
-- `/zc edit effect add ...` 追加镜头相关效果后，聊天栏追加同样的提示。
+- `/camerarail edit effect add ...` 追加镜头相关效果后，聊天栏追加同样的提示。
 
 ```text
-plugins/ZthCameraRail/
+plugins/CameraRail/
 ├── config.yml       # 全局配置
 ├── messages.yml     # 玩家消息（MiniMessage）
 ├── tracks.yml       # 轨道
@@ -94,7 +94,7 @@ tracks:
 登录流程确认玩家已登录后，由其他插件或命令发送信号：
 
 ```text
-/zc advance login:ready <玩家>
+/camerarail advance login:ready <玩家>
 ```
 
 `start` 是镜头眼睛的位置；`exit` 是玩家脚部的位置，仅在 `exit-mode: custom` 时使用。默认 `exit-mode` 为 `animation-end`，即停在镜头最后的位置；如果镜头在半空，玩家会按原版规则坠落，需要安全落点时请使用 `pre-entry` 或 `custom`。
@@ -103,62 +103,62 @@ tracks:
 
 ## 命令
 
-根命令为 `/zth-camera`，别名 `/zc`。
+根命令为 `/camerarail`，别名 `/camera-rail`。
 
 | 命令 | 说明 |
 | --- | --- |
-| `/zc help [命令]` | 查看帮助；带命令名时显示用法、参数和权限 |
-| `/zc list` | 列出已加载的轨道 |
-| `/zc info <id>` | 显示轨道详情 |
-| `/zc play [id] [玩家]` | 播放轨道；只加载一条轨道时可省略 id |
-| `/zc stop [玩家]` | 停止播放并恢复玩家 |
-| `/zc advance <信号或*> [玩家]` | 推进等待步骤；`*` 表示当前等待步骤 |
-| `/zc reload` | 重载配置、消息和轨道 |
-| `/zc create <id> [名称]` | 以当前位置和视角创建轨道 |
-| `/zc delete <id> confirm` | 删除轨道 |
-| `/zc edit` | 打开图形编辑器 |
-| `/zc edit help [命令]` | 查看编辑器命令 |
+| `/camerarail help [命令]` | 查看帮助；带命令名时显示用法、参数和权限 |
+| `/camerarail list` | 列出已加载的轨道 |
+| `/camerarail info <id>` | 显示轨道详情 |
+| `/camerarail play [id] [玩家]` | 播放轨道；只加载一条轨道时可省略 id |
+| `/camerarail stop [玩家]` | 停止播放并恢复玩家 |
+| `/camerarail advance <信号或*> [玩家]` | 推进等待步骤；`*` 表示当前等待步骤 |
+| `/camerarail reload` | 重载配置、消息和轨道 |
+| `/camerarail create <id> [名称]` | 以当前位置和视角创建轨道 |
+| `/camerarail delete <id> confirm` | 删除轨道 |
+| `/camerarail edit` | 打开图形编辑器 |
+| `/camerarail edit help [命令]` | 查看编辑器命令 |
 
-控制台执行 `play`、`stop`、`advance` 时必须提供玩家名。有人处于编辑器时，`/zc reload` 会被拒绝，避免覆盖未完成的草稿。
+控制台执行 `play`、`stop`、`advance` 时必须提供玩家名。有人处于编辑器时，`/camerarail reload` 会被拒绝，避免覆盖未完成的草稿。
 
 命令编辑器常用命令：
 
 ```text
-/zc edit create login 登录过场
-/zc edit add 100                # 追加移动步骤（当前视角）
-/zc edit path                   # 追加路径步骤
-/zc edit point                  # 追加路径点
-/zc edit hold 40                # 追加停留
-/zc edit cut 40                 # 追加快切并停留 40t
-/zc edit wait login:ready       # 追加等待
-/zc edit effect add darkness
-/zc edit title 20 60 20 欢迎|正在同步
-/zc edit select 3               # 选中步骤
-/zc edit start                  # 起点设为当前视角
-/zc edit exit                   # 自定义退出点（当前脚下位置）
-/zc edit exit-mode pre-entry
-/zc edit preview
-/zc edit undo
-/zc edit done
+/camerarail edit create login 登录过场
+/camerarail edit add 100                # 追加移动步骤（当前视角）
+/camerarail edit path                   # 追加路径步骤
+/camerarail edit point                  # 追加路径点
+/camerarail edit hold 40                # 追加停留
+/camerarail edit cut 40                 # 追加快切并停留 40t
+/camerarail edit wait login:ready       # 追加等待
+/camerarail edit effect add darkness
+/camerarail edit title 20 60 20 欢迎|正在同步
+/camerarail edit select 3               # 选中步骤
+/camerarail edit start                  # 起点设为当前视角
+/camerarail edit exit                   # 自定义退出点（当前脚下位置）
+/camerarail edit exit-mode pre-entry
+/camerarail edit preview
+/camerarail edit undo
+/camerarail edit done
 ```
 
-每次修改都会异步写入 `tracks.yml`，`/zc edit undo` 可撤销最近 30 次修改。完整命令列表和参数见 `/zc edit help`。
+每次修改都会异步写入 `tracks.yml`，`/camerarail edit undo` 可撤销最近 30 次修改。完整命令列表和参数见 `/camerarail edit help`。
 
 ## 权限
 
 | 权限 | 默认 | 说明 |
 | --- | --- | --- |
-| `zth.camera.command` | OP | 使用根命令和只读命令 |
-| `zth.camera.play` | OP | 播放轨道 |
-| `zth.camera.stop` | OP | 停止播放 |
-| `zth.camera.advance` | OP | 发送等待信号 |
-| `zth.camera.edit` | OP | 使用游戏内编辑器 |
-| `zth.camera.manage` | OP | 创建和删除轨道（同时需要 `edit`） |
-| `zth.camera.reload` | OP | 重载配置和轨道 |
+| `camerarail.command` | OP | 使用根命令和只读命令 |
+| `camerarail.play` | OP | 播放轨道 |
+| `camerarail.stop` | OP | 停止播放 |
+| `camerarail.advance` | OP | 发送等待信号 |
+| `camerarail.edit` | OP | 使用游戏内编辑器 |
+| `camerarail.manage` | OP | 创建和删除轨道（同时需要 `edit`） |
+| `camerarail.reload` | OP | 重载配置和轨道 |
 
-`zth.camera.command` 只允许执行根命令，不会自动包含其他子权限。只需要播放和查看的场景，可以给 `zth.camera.command` 与 `zth.camera.play`，不要授予 `edit`、`manage` 或 `reload`。
+`camerarail.command` 只允许执行根命令，不会自动包含其他子权限。只需要播放和查看的场景，可以给 `camerarail.command` 与 `camerarail.play`，不要授予 `edit`、`manage` 或 `reload`。
 
-被播放的玩家不需要拥有权限；播放由有 `zth.camera.play` 权限的命令发送者或插件发起。
+被播放的玩家不需要拥有权限；播放由有 `camerarail.play` 权限的命令发送者或插件发起。
 
 ## 配置
 
@@ -236,7 +236,7 @@ tracks:
 
 ## 游戏内编辑器
 
-`/zc edit`（或 `/zc edit gui`）打开 Paper 的 Dialog 全屏编辑器，不需要额外依赖或客户端 mod。
+`/camerarail edit`（或 `/camerarail edit gui`）打开 Paper 的 Dialog 全屏编辑器，不需要额外依赖或客户端 mod。
 
 - 轨道列表：选择已有轨道，或以当前视角新建轨道。
 - 轨道概览：查看步骤、总时长和摇摆；编辑轨道设置、起点、退出点、入场效果；预览整条轨道。
@@ -245,7 +245,7 @@ tracks:
 - 硬切步骤表单在目标姿态之外提供“硬切后停留”时长（tick，`0` 表示纯瞬时）；硬切后的画面在两种镜头模式下都是单帧切换、没有过渡帧。
 - 路径步骤有独立的路径点列表，可追加当前视角、插入、删除和上下移动；路径点表单也可以用“上一步/下一步”在相邻路径点之间切换，切换会丢弃未保存的输入。
 - 等待步骤可以复用已有信号；效果步骤提供常用效果列表，也允许输入任意注册 id。
-- 所有修改立即自动保存，可撤销最近 30 次；按 Esc 关闭后再执行 `/zc edit` 会回到上次的界面和页码。
+- 所有修改立即自动保存，可撤销最近 30 次；按 Esc 关闭后再执行 `/camerarail edit` 会回到上次的界面和页码。
 
 对话框依赖 Paper 26.1.2 的 Dialog API。命令编辑器不依赖 Dialog，始终可用，适合快速追加步骤或微调参数。
 
@@ -298,7 +298,7 @@ int reload();
 - 假玩家的位置、pitch 和身体朝向每 3 tick 从同一份镜头姿态同步一次（与精确实体跟踪的节奏一致）；视角 yaw 的 head 同步则是每个镜头 tick 检查、量化值变化才发包。插件直接计算并下发假玩家的 `MOVEMENT_SPEED` 属性：客户端不会给客户端侧实体应用药水效果的属性修正，所以 `slowness`/`speed` 的 FOV 必须走属性包。PacketEvents 不可用或假玩家生成失败时，自动保持原盔甲架镜头。
 - `cut` 硬切不走上面的客户端帧间插值，在两种镜头模式下都是单帧切换：假玩家镜头下，插件在硬切时销毁旧的客户端相机实体，按目标姿态重建假玩家实体，并在同一 tick 把 `Set Camera` 指向新实体（切换相机目标本身是瞬时的，新实体没有位置/头部插值状态），同时把 `MOVEMENT_SPEED` 属性（`slowness`/`speed` 的 FOV）和 `blindness`/`darkness`/`night_vision` 等镜头可见效果重新下发到新实体；盔甲架回退模式下，客户端会插值镜头盔甲架的位置和朝向（约 3 tick），直接传送会滑过去，所以插件先解除相机、把玩家本体瞬移到硬切姿态（解除期间客户端相机就是玩家本体，画面已经立即切到目标镜头），再移动盔甲架，约 4 tick 后等客户端追上再重新锁定相机。两种模式都没有补间；`cut` 的 `duration` 只控制跳转后的停留。
 - 假玩家镜头激活时**不会**向该客户端发送盔甲架实体：盔甲架只作为服务端 spectator target 存在。只有假玩家不可用、回退到盔甲架镜头时才对玩家调用 `showEntity`。旁观者客户端能看见 invisible 实体，若把盔甲架发给客户端，会在镜头位置出现半透明模型。
-- 播放期间通过给玩家加一个 transient 的 `waypoint_receive_range` 乘算修正符（`MULTIPLY_SCALAR_1 = -1`）隐藏原版定位条（locator bar）：相机锁定后隐藏，移除修正符即恢复（最多 1 tick 生效）。只增删本插件命名空间下的修正符，不读取/写回属性基础值，不碰其他插件的 modifier，因此第三方对该属性的修改不会被覆盖；修正符不落盘，崩溃/重登不会残留。镜头 tick 每 20 tick 在玩家调度器上复查一次（第三方清 modifiers、`/zc reload` 切换配置都会被纠正），所有结束/退出/恢复路径都会移除。实现见 `LocatorBarHider`，背景见 [docs/locator-bar.md](docs/locator-bar.md)。
+- 播放期间通过给玩家加一个 transient 的 `waypoint_receive_range` 乘算修正符（`MULTIPLY_SCALAR_1 = -1`）隐藏原版定位条（locator bar）：相机锁定后隐藏，移除修正符即恢复（最多 1 tick 生效）。只增删本插件命名空间下的修正符，不读取/写回属性基础值，不碰其他插件的 modifier，因此第三方对该属性的修改不会被覆盖；修正符不落盘，崩溃/重登不会残留。镜头 tick 每 20 tick 在玩家调度器上复查一次（第三方清 modifiers、`/camerarail reload` 切换配置都会被纠正），所有结束/退出/恢复路径都会移除。实现见 `LocatorBarHider`，背景见 [docs/locator-bar.md](docs/locator-bar.md)。
 - 第 2、10 tick 会重发一次 `Set Camera`，第 45 tick 检查客户端是否仍在发送自身移动包，未锁定时在控制台输出警告。
 - 镜头锁定时，旁观者按数字键 1-9 或使用旁观菜单传送到其他玩家会被服务端处理为 `TeleportCause.SPECTATE` 的本体传送；插件会取消该传送并重新锁定镜头，动作栏提示镜头仍在锁定中，不再把它当作外部传送而提前结束播放。其他原因的外部传送仍按原策略结束会话。
 - 镜头跨区块时，玩家实体跟随移动以保证区块加载；可以用轨道字段 `follow: false` 或 `session.follow-camera: false` 关闭。
@@ -325,7 +325,7 @@ int reload();
 - Folia 下镜头实体跨 region（例如远距离 `cut`）时，服务端会把旧镜头实体替换为新实体，并先清空一次旁观目标。事件层表现为一次 `PlayerStopSpectatingEntityEvent`；插件通过服务端 sneak 标记判断它并非玩家按 Shift，取消该事件并静默重新锁定镜头，因此不会结束预览、不会提示锁定、也不会触发 `allow-sneak-exit`。首次发生时会记录一条 `Server released the spectator camera ... without a Shift input` INFO 日志用于确认；Paper 上通常不会出现该分支（镜头实体不会被替换，除非其他插件或传送路径主动释放了相机）。
 - 自定义 `sway` 的 `yaw` 在部分客户端可能出现短促的水平回抽；预设档位 `yaw` 为 `0`，默认不会触发。
 - 一条轨道只能属于一个世界。
-- 编辑器保存会重写整个 `tracks.yml`，只保留文件头注释。文件中存在无法解析的轨道时，编辑器会拒绝保存，需要先修复并执行 `/zc reload`。
+- 编辑器保存会重写整个 `tracks.yml`，只保留文件头注释。文件中存在无法解析的轨道时，编辑器会拒绝保存，需要先修复并执行 `/camerarail reload`。
 - 从选中步骤开始预览时，不会回放之前的 `effect` 和 `title` 步骤，也不会施加入场效果；从轨道起点开始的预览与真实播放一致，会施加入场效果。
 - 不支持循环轨道、多轨道叠加或任意命令步骤；流程编排交给其他插件。
 - 镜头锁定依赖客户端正确处理 `Set Camera` 包，少数第三方客户端或协议转换链路可能无法锁定旁观相机。
@@ -341,7 +341,7 @@ mvn test
 mvn package
 ```
 
-产物为 `target/ZthCameraRail.jar`。`mvn test` 覆盖缓动、路径曲线、摇摆、YAML 解析与写入、帮助页排版等单元测试。
+产物为 `target/CameraRail-1.1.0.jar`。`mvn test` 覆盖缓动、路径曲线、摇摆、YAML 解析与写入、帮助页排版等单元测试。
 
 ## 文档
 
