@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/branding/hero.png" alt="CameraRail — 旁观者镜头轨道与过场动画（Paper / Folia）" width="100%">
+</p>
+
 # ZthCameraRail
 
 ZthCameraRail 是一个用于 Paper / Folia 的 Minecraft 摄像机轨道插件。播放时，玩家会被切换为旁观者，服务端用一个隐藏的盔甲架作为相机锚点；安装 PacketEvents 后，客户端还会通过一个只存在于该客户端的假玩家实体渲染镜头，从而获得真正的 FOV 与更完整的药水效果。镜头按 `tracks.yml` 中定义的路径移动、停留或等待外部信号；播放结束后，玩家按配置的落点返回。
