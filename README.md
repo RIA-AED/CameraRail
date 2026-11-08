@@ -2,55 +2,56 @@
   <img src="docs/branding/hero.png" alt="CameraRail — 旁观者镜头轨道与过场动画（Paper / Folia）" width="100%">
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/Paper-26.1.2-3d7cc9" alt="Paper 26.1.2">
+  <img src="https://img.shields.io/badge/Folia-26.1.2-4caf50" alt="Folia 26.1.2">
+  <img src="https://img.shields.io/badge/Java-25-f89820" alt="Java 25">
+  <img src="https://img.shields.io/badge/version-1.1.0-6f42c1" alt="Version 1.1.0">
+  <img src="https://img.shields.io/badge/license-MIT-97ca00" alt="License MIT">
+</p>
+
 # CameraRail
 
-CameraRail 是一个用于 Paper / Folia 的 Minecraft 摄像机轨道插件。播放时，玩家会被切换为旁观者，服务端用一个隐藏的盔甲架作为相机锚点；安装 PacketEvents 后，客户端还会通过一个只存在于该客户端的假玩家实体渲染镜头，从而获得真正的 FOV 与更完整的药水效果。镜头按 `tracks.yml` 中定义的路径移动、停留或等待外部信号；播放结束后，玩家按配置的落点返回。
+CameraRail 是一个面向 **Paper / Folia** 的镜头轨道与过场动画插件。
 
-插件只负责镜头本身。登录验证、小游戏流程、正式传送和流程状态切换由其他插件负责，它们可以通过 `CameraService`、事件或 `/camerarail` 命令与镜头播放配合。
+播放开始时，玩家会被切换为旁观者并锁定镜头；镜头沿 `tracks.yml` 中编排的轨道移动、停留或等待外部信号，播放结束后玩家按配置的落点回到地面。轨道可以手写 YAML，也可以完全在游戏内的图形编辑器中录制和调整。
 
-## 特性
+插件只负责镜头本身。登录验证、小游戏流程、正式传送和流程状态切换仍由你现有的插件负责，它们可以通过 `CameraService`、事件或 `/camerarail` 命令与镜头配合，详见 [插件集成](docs/integration.md)。
 
-- 7 种轨道步骤：`move`、`path`、`hold`、`wait`、`cut`、`effect`、`title`；`cut` 硬切后可选停留一段时间
-- `path` 使用向心 Catmull-Rom 曲线，按弧长参数化，可连续穿过多个路径点
-- 7 种缓动曲线，支持步骤级 `sway` 覆盖
-- `wait` 支持外部信号、提前信号排队和超时
-- 三种退出落点：镜头最后位置、进入前位置、自定义位置
-- 基于 Paper Dialog 的图形编辑器与命令编辑器，修改即时保存，支持撤销
-- 玩家退出或服务器崩溃后，下次登录恢复播放前的状态
-- 播放期间隐藏被拍摄玩家的原版定位条（locator bar），正常/异常结束都恢复
-- Paper / Folia 双端支持
-- 可选 PacketEvents 假玩家镜头：FOV、失明雾/压天、夜视雾等按镜头实体读取的效果可用；不 shade PacketEvents，未安装时自动回退到盔甲架镜头
+## 功能特性
+
+- **7 种轨道步骤**：`move`、`path`、`hold`、`wait`、`cut`、`effect`、`title`
+- **平滑运镜**：`path` 可连续穿过多个路径点，曲线平滑、速度均匀；另提供 7 种缓动曲线
+- **镜头摇摆**：`off`、`gentle`、`natural`、`strong` 四档预设，也可自定义振幅与周期
+- **外部信号**：`wait` 步骤可等待登录完成、倒计时等信号，支持信号提前到达与超时
+- **三种退出落点**：镜头最后位置、进入前位置或自定义位置
+- **游戏内编辑器**：基于 Paper Dialog 的全屏编辑器，另有命令编辑器；修改即时保存，支持撤销
+- **镜头效果**：药水效果、标题与副标题、入场效果；安装 PacketEvents 后支持 FOV、失明雾与夜视雾
+- **定位条隐藏**：播放期间隐藏被拍摄玩家的原版定位条（locator bar），正常或异常结束都会恢复
+- **崩溃恢复**：玩家退出或服务器崩溃后，下次登录恢复播放前的状态
+- **Paper / Folia 双端支持**
 
 ## 环境要求
 
 | 项目 | 要求 |
 | --- | --- |
-| 服务端 | Paper 26.1.2（build 74 stable 测试通过）或 Folia 26.1.2 |
+| 服务端 | Paper 26.1.2+ 或 Folia 26.1.2+ |
 | Java | 25 |
 | Minecraft | 26.1.2 |
-| 客户端 | 原版 Java 版客户端，需正确处理 `Set Camera` 包 |
-| PacketEvents | 可选，推荐 2.14.0+；用于假玩家镜头，不 shade |
+| 客户端 | 原版 Java 版客户端 |
+| PacketEvents | 可选，推荐 2.14.0+ |
 
-插件已在 Paper 26.1.2-74 上完成基础镜头播放、信号推进和退出落点的实机测试。假玩家镜头依赖 PacketEvents 2.14.0，并已在 Paper 启动时确认注册成功；客户端画面（FOV、失明雾）的最终效果仍建议按 [docs/testing.md](docs/testing.md) 在目标客户端版本上验收。未安装 PacketEvents 或假玩家创建失败时，插件会记录日志并回退到盔甲架镜头，不会阻止播放。
+PacketEvents 用于增强镜头画面，不是必需依赖，插件也不会打包它。未安装时插件会自动回退到盔甲架镜头：轨道播放、信号、编辑器和 API 全部照常工作，只有依赖镜头实体的画面效果（FOV、失明雾等）不可用。
 
 ## 安装
 
-1. 将 PacketEvents 2.14.0+ 的插件 jar 放入服务端 `plugins/` 目录（可选，但 FOV/失明雾需要它）。
-2. 构建或下载 `CameraRail-1.1.0.jar`，放入同一 `plugins/` 目录。
-3. 启动服务器，插件会生成默认配置。
+1. 下载 `CameraRail-1.1.0.jar`，放入服务端的 `plugins/` 目录。
+2. （可选）把 PacketEvents 2.14.0+ 放入同一目录，以获得完整的 FOV 与雾效。
+3. 启动服务器，插件会自动生成默认配置与示例轨道。
 4. 编辑 `plugins/CameraRail/tracks.yml`，或进入游戏执行 `/camerarail edit`。
-5. 执行 `/camerarail reload`，然后 `/camerarail play <轨道>` 预览。
+5. 执行 `/camerarail reload`，然后用 `/camerarail play <轨道>` 预览。
 
-首次启动会生成配置和轨道文件；`recovery/` 在第一次播放时创建。
-
-没有安装 PacketEvents 时不会阻止插件运行，但会明确提示：
-
-- 启动日志为 WARN：`PacketEvents not installed; fake-player camera disabled...`；
-- 播放使用 `blindness`/`slowness`/`speed` 等镜头相关效果的轨道时，聊天栏提示当前是盔甲架回退模式，控制台只对每条轨道警告一次；
-- 编辑器轨道概览显示“镜头模式: 盔甲架回退 · FOV/失明雾不可用”；
-- `/camerarail info <轨道>` 显示“镜头模式: 假玩家 (PacketEvents)”或“镜头模式: 盔甲架回退”；
-- 效果选择器摘要与效果表单显示回退说明；
-- `/camerarail edit effect add ...` 追加镜头相关效果后，聊天栏追加同样的提示。
+首次启动会生成配置和轨道文件，`recovery/` 会在第一次播放时创建：
 
 ```text
 plugins/CameraRail/
@@ -72,7 +73,6 @@ tracks:
     world: world
     start: { x: 0.5, y: 100.0, z: 0.5, yaw: 0, pitch: 10 }
     exit-mode: pre-entry
-    sway: natural
     entry-effects:
       - effect: darkness
     steps:
@@ -83,6 +83,12 @@ tracks:
         duration: 100
         easing: ease-in-out
       - { type: wait, signal: "login:ready", timeout: 6000 }
+      - type: title
+        title: "<gray>欢迎回来</gray>"
+        subtitle: "<dark_gray>正在同步你的位置</dark_gray>"
+        fade-in: 20
+        stay: 60
+        fade-out: 20
       - type: path
         duration: 120
         easing: ease-in-out
@@ -99,7 +105,7 @@ tracks:
 
 `start` 是镜头眼睛的位置；`exit` 是玩家脚部的位置，仅在 `exit-mode: custom` 时使用。默认 `exit-mode` 为 `animation-end`，即停在镜头最后的位置；如果镜头在半空，玩家会按原版规则坠落，需要安全落点时请使用 `pre-entry` 或 `custom`。
 
-信号也可以提前发送：如果信号到达时镜头还没走到匹配的 `wait`，插件会先记录，进入该步骤后再消费。每个 `wait` 只消费一次信号；步骤的 `timeout`（tick，`0` 表示不超时）或 `config.yml` 的 `session.wait-timeout` 控制超时。
+信号可以提前发送：如果信号到达时镜头还没走到匹配的 `wait`，插件会先记录，进入该步骤后再消费。每个 `wait` 只消费一次信号；步骤的 `timeout`（tick，`0` 表示不超时）或 `config.yml` 中的 `session.wait-timeout` 控制超时。
 
 ## 命令
 
@@ -110,14 +116,14 @@ tracks:
 | `/camerarail help [命令]` | 查看帮助；带命令名时显示用法、参数和权限 |
 | `/camerarail list` | 列出已加载的轨道 |
 | `/camerarail info <id>` | 显示轨道详情 |
-| `/camerarail play [id] [玩家]` | 播放轨道；只加载一条轨道时可省略 id |
+| `/camerarail play <id> [玩家]` | 播放轨道；只加载一条轨道时可省略 id |
 | `/camerarail stop [玩家]` | 停止播放并恢复玩家 |
 | `/camerarail advance <信号或*> [玩家]` | 推进等待步骤；`*` 表示当前等待步骤 |
-| `/camerarail reload` | 重载配置、消息和轨道 |
 | `/camerarail create <id> [名称]` | 以当前位置和视角创建轨道 |
 | `/camerarail delete <id> confirm` | 删除轨道 |
 | `/camerarail edit` | 打开图形编辑器 |
 | `/camerarail edit help [命令]` | 查看编辑器命令 |
+| `/camerarail reload` | 重载配置、消息和轨道 |
 
 控制台执行 `play`、`stop`、`advance` 时必须提供玩家名。有人处于编辑器时，`/camerarail reload` 会被拒绝，避免覆盖未完成的草稿。
 
@@ -153,10 +159,10 @@ tracks:
 | `camerarail.stop` | OP | 停止播放 |
 | `camerarail.advance` | OP | 发送等待信号 |
 | `camerarail.edit` | OP | 使用游戏内编辑器 |
-| `camerarail.manage` | OP | 创建和删除轨道（同时需要 `edit`） |
+| `camerarail.manage` | OP | 创建和删除轨道（同时需要 `camerarail.edit`） |
 | `camerarail.reload` | OP | 重载配置和轨道 |
 
-`camerarail.command` 只允许执行根命令，不会自动包含其他子权限。只需要播放和查看的场景，可以给 `camerarail.command` 与 `camerarail.play`，不要授予 `edit`、`manage` 或 `reload`。
+`camerarail.command` 只允许执行根命令，不会自动包含其他子权限。只需要播放和查看的场景，可以只授予 `camerarail.command` 与 `camerarail.play`，不要授予 `edit`、`manage` 或 `reload`。
 
 被播放的玩家不需要拥有权限；播放由有 `camerarail.play` 权限的命令发送者或插件发起。
 
@@ -214,7 +220,7 @@ tracks:
 | `effect` | 添加或移除药水效果 | `effect`、`action`、`amplifier`、`duration` |
 | `title` | 发送标题和副标题 | `title`、`subtitle`、`fade-in`、`stay`、`fade-out` |
 
-`path` 的 `points` 是当前姿态之后的路径点，至少一个。`easing` 可选 `linear`、`ease-in`、`ease-out`、`ease-in-out`、`smoothstep`、`smootherstep`、`sine`。`wait` 的 `timeout` 省略时使用 `session.wait-timeout`。`title` 的文本使用 MiniMessage。`effect` 的 `action` 默认 `add`，`duration` 省略或为 `0` 时持续到显式移除或轨道结束。同一轨道内的 `wait` 信号名不能重复。`cut` 的 `duration` 省略或为 `0` 时是纯瞬时硬切，不占用时间轴；正整数 N 表示硬切后在新姿态停留 N tick，计入轨道总时长，整个过程没有过渡帧。
+`path` 的 `points` 是当前姿态之后的路径点，至少一个。`easing` 可选 `linear`、`ease-in`、`ease-out`、`ease-in-out`、`smoothstep`、`smootherstep`、`sine`。`wait` 的 `timeout` 省略时使用 `session.wait-timeout`。`title` 的文本使用 MiniMessage。`effect` 的 `action` 默认 `add`，`duration` 省略或为 `0` 时持续到显式移除或轨道结束。同一轨道内的 `wait` 信号名不能重复。`cut` 的 `duration` 省略或为 `0` 时是纯瞬时硬切，不占用时间轴；正整数 N 表示硬切后在新姿态停留 N tick，计入轨道总时长。
 
 ### 退出落点
 
@@ -232,7 +238,7 @@ tracks:
 
 预设档位的 `yaw` 为 `0`，只做位置漂移和轻微俯仰；需要左右转头时，在自定义映射中显式设置 `yaw`。YAML 会把未加引号的 `off` 解析为布尔值，插件按 `off` 处理。
 
-完整的字段、校验规则和更多示例见 [docs/yaml-reference.md](docs/yaml-reference.md)。
+完整的字段、校验规则和更多示例见 [tracks.yml 字段参考](docs/yaml-reference.md)。
 
 ## 游戏内编辑器
 
@@ -242,8 +248,8 @@ tracks:
 - 轨道概览：查看步骤、总时长和摇摆；编辑轨道设置、起点、退出点、入场效果；预览整条轨道。
 - 步骤表单：按类型编辑全部字段，支持保存并返回、上一步/下一步、上移/下移、复制、删除和单步预览。
 - 坐标表单提供“取当前视角/取当前脚下位置”和“传送到此”；起点和步骤按眼睛坐标记录，退出点按脚部坐标记录。
-- 硬切步骤表单在目标姿态之外提供“硬切后停留”时长（tick，`0` 表示纯瞬时）；硬切后的画面在两种镜头模式下都是单帧切换、没有过渡帧。
-- 路径步骤有独立的路径点列表，可追加当前视角、插入、删除和上下移动；路径点表单也可以用“上一步/下一步”在相邻路径点之间切换，切换会丢弃未保存的输入。
+- 硬切步骤表单在目标姿态之外提供“硬切后停留”时长（tick，`0` 表示纯瞬时）。
+- 路径步骤有独立的路径点列表，可追加当前视角、插入、删除和上下移动；路径点表单也可以用“上一步/下一步”在相邻路径点之间切换。
 - 等待步骤可以复用已有信号；效果步骤提供常用效果列表，也允许输入任意注册 id。
 - 所有修改立即自动保存，可撤销最近 30 次；按 Esc 关闭后再执行 `/camerarail edit` 会回到上次的界面和页码。
 
@@ -289,59 +295,47 @@ int reload();
 
 `completed()` 仅在轨道自然走完并成功把玩家放到退出位置时为 `true`。`EndReason` 包括 `FINISHED`、`STOPPED`、`QUIT`、`KICKED`、`TIMEOUT`、`LIMIT`、`CAMERA_LOST`、`EXTERNAL_TELEPORT`、`GAME_MODE_CHANGE`、`WORLD_CHANGE`、`DEATH`、`ERROR` 和 `RECOVERED`。
 
-更完整的集成顺序、AuthMe 示例和事件用法见 [docs/integration.md](docs/integration.md)。
+更完整的集成顺序、AuthMe 示例和事件用法见 [插件集成](docs/integration.md)。
 
-## 实现说明
+## 常见问题
 
-- 服务端锚点是一个隐藏的普通（非 marker）盔甲架，玩家以旁观者身份附身到它；服务端每 tick 更新实体姿态，客户端负责帧间插值，不会每 tick 传送玩家本体。
-- 安装 PacketEvents 时，插件还会生成一个只存在于该客户端的 PLAYER 实体，并把发往盔甲架的 `Set Camera` 包改写成假玩家 id。服务端 `getSpectatorTarget()` 仍是盔甲架，区块票据、每 tick 吸附和跨区块跟随都不变；假玩家负责客户端的 Camera、FOV 和按镜头实体读取的效果。客户端旁观相机的视角取的是实体的 head yaw，而位置包只同步身体朝向，所以插件还要在量化后的 head yaw 变化时逐 tick 下发 `EntityHeadLook`（假玩家没有服务端实体，原版实体跟踪不会替它发这个包）；否则画面 yaw 会停在进入镜头时的角度。
-- 假玩家的位置、pitch 和身体朝向每 3 tick 从同一份镜头姿态同步一次（与精确实体跟踪的节奏一致）；视角 yaw 的 head 同步则是每个镜头 tick 检查、量化值变化才发包。插件直接计算并下发假玩家的 `MOVEMENT_SPEED` 属性：客户端不会给客户端侧实体应用药水效果的属性修正，所以 `slowness`/`speed` 的 FOV 必须走属性包。PacketEvents 不可用或假玩家生成失败时，自动保持原盔甲架镜头。
-- `cut` 硬切不走上面的客户端帧间插值，在两种镜头模式下都是单帧切换：假玩家镜头下，插件在硬切时销毁旧的客户端相机实体，按目标姿态重建假玩家实体，并在同一 tick 把 `Set Camera` 指向新实体（切换相机目标本身是瞬时的，新实体没有位置/头部插值状态），同时把 `MOVEMENT_SPEED` 属性（`slowness`/`speed` 的 FOV）和 `blindness`/`darkness`/`night_vision` 等镜头可见效果重新下发到新实体；盔甲架回退模式下，客户端会插值镜头盔甲架的位置和朝向（约 3 tick），直接传送会滑过去，所以插件先解除相机、把玩家本体瞬移到硬切姿态（解除期间客户端相机就是玩家本体，画面已经立即切到目标镜头），再移动盔甲架，约 4 tick 后等客户端追上再重新锁定相机。两种模式都没有补间；`cut` 的 `duration` 只控制跳转后的停留。
-- 假玩家镜头激活时**不会**向该客户端发送盔甲架实体：盔甲架只作为服务端 spectator target 存在。只有假玩家不可用、回退到盔甲架镜头时才对玩家调用 `showEntity`。旁观者客户端能看见 invisible 实体，若把盔甲架发给客户端，会在镜头位置出现半透明模型。
-- 播放期间通过给玩家加一个 transient 的 `waypoint_receive_range` 乘算修正符（`MULTIPLY_SCALAR_1 = -1`）隐藏原版定位条（locator bar）：相机锁定后隐藏，移除修正符即恢复（最多 1 tick 生效）。只增删本插件命名空间下的修正符，不读取/写回属性基础值，不碰其他插件的 modifier，因此第三方对该属性的修改不会被覆盖；修正符不落盘，崩溃/重登不会残留。镜头 tick 每 20 tick 在玩家调度器上复查一次（第三方清 modifiers、`/camerarail reload` 切换配置都会被纠正），所有结束/退出/恢复路径都会移除。实现见 `LocatorBarHider`，背景见 [docs/locator-bar.md](docs/locator-bar.md)。
-- 第 2、10 tick 会重发一次 `Set Camera`，第 45 tick 检查客户端是否仍在发送自身移动包，未锁定时在控制台输出警告。
-- 镜头锁定时，旁观者按数字键 1-9 或使用旁观菜单传送到其他玩家会被服务端处理为 `TeleportCause.SPECTATE` 的本体传送；插件会取消该传送并重新锁定镜头，动作栏提示镜头仍在锁定中，不再把它当作外部传送而提前结束播放。其他原因的外部传送仍按原策略结束会话。
-- 镜头跨区块时，玩家实体跟随移动以保证区块加载；可以用轨道字段 `follow: false` 或 `session.follow-camera: false` 关闭。
-- 服务端镜头实体（含回退模式的盔甲架）使用精确位置同步模式（通过反射设置 `requiresPrecisePosition`），让位置、pitch 和身体朝向走 float 的 `EntityPositionSync`；但客户端旁观相机的视角 yaw 来自 head yaw，协议只提供 1 字节（1/256 圈 = 1.40625°）的 `RotateHead` 包并由客户端做 3 tick 插值，所以慢速旋转仍可能出现亚度级台阶与约 2–3 tick 的跟随滞后——这与旁观原版玩家一致，不是本插件能消除的量化。字段不可用时自动退回默认的实体跟踪。
-- 退出时先解除旁观/相机并恢复游戏模式、飞行状态和药水效果，清空残余速度后再把玩家传送到落点，并在 1 tick 后对同一落点再重同步一次传送：这样既避免客户端在相机锁定期间收到传送造成的位置确认相位错乱，也保证落点脚底位于方块表面之上（`ExitPlacement` 会抬升 0.1 mm 并在脚底嵌入方块碰撞体时抬到碰撞体顶，因为 `pose.y - eyeHeight` 的 float 误差会让脚底低约 4.8e-9，GUI 取景的 6 位小数取整、潜行/游泳取景与站立恢复的眼高差也可能让脚底嵌进方块）。编辑器的“传送到此”使用同一套落点校正与重同步。
-- 退出与编辑器“传送到此”都会对同一落点发送两次传送（间隔约 1 tick）来重置客户端的传送确认状态；监听 `PlayerTeleportEvent` 的其他插件会看到两次 `PLUGIN` 传送。
+### 没有安装 PacketEvents 会怎样？
 
-### Folia
+插件自动回退到盔甲架镜头，轨道播放不受影响。启动日志会有一条 WARN；播放依赖镜头实体的效果时，聊天栏会提示当前为回退模式，`/camerarail info <id>` 和编辑器也会显示镜头模式。回退模式下 `nausea` 完整生效，`darkness` 部分生效、`night_vision` 大部分生效，`blindness` / `slowness` 没有画面变化。详见 [旁观者镜头下的药水效果](docs/spectator-effects.md)。
 
-插件在 `plugin.yml` 中声明 `folia-supported: true`。镜头实体使用 `EntityScheduler`，玩家操作在玩家自己的 `EntityScheduler` 上执行；镜头和玩家传送均使用 `teleportAsync`，镜头所在区块通过插件区块票据保持加载，会话结束后释放。没有全局 tick 任务，每个会话只有一个镜头实体 tick 任务。
+### 玩家中途退出或服务器崩溃了怎么办？
 
-### 崩溃恢复
+默认开启崩溃恢复（`session.recovery`）。播放前会把玩家状态写入 `recovery/`；正常结束删除，中途退出或崩溃则保留，下次登录自动恢复位置、游戏模式、飞行状态和药水效果。超过 `session.recovery-max-age-hours`（默认 168 小时）的文件会在下次登录读取时删除。请勿手动删除正在使用的恢复文件。
 
-开启 `session.recovery` 时，播放前会在 `recovery/` 下写入玩家状态。正常结束会删除；玩家退出或服务器崩溃时保留，下次登录恢复位置、游戏模式、飞行状态和药水效果。超过 `session.recovery-max-age-hours` 的文件会在下次登录读取时删除。不要手动删除正在使用的恢复文件。
+### 其他插件传送玩家会打断镜头吗？
+
+会。镜头期间的外部传送会结束播放并交还控制权（插件不会抢回位置），这是为了避免两个插件互相传送。请先 `/camerarail stop`，或把传送推迟到 `CameraTrackEndEvent` 之后。原版旁观者的数字键/旁观菜单传送是例外：镜头锁定期间会被拦下并保持锁定。
+
+### 预览和真实播放有什么区别？
+
+预览使用同一套轨道和步骤，区别有三点：预览总是可以按 Shift 结束；预览结束后会回到预览前的位置，而不是按 `exit-mode` 落点；从中间步骤开始的预览不会回放之前的 `effect` / `title` 步骤，也不施加入场效果（从轨道起点开始则与真实播放一致）。
+
+### 玩家可以自己退出镜头吗？
+
+默认不行。`session.allow-sneak-exit` 为 `false` 时，真实播放中按 Shift 不会结束镜头（预览总是允许）；需要结束请由管理员执行 `/camerarail stop`。
+
+### 支持 Folia 吗？
+
+支持。插件声明了 `folia-supported`，使用区域调度器处理镜头实体与玩家操作，没有全局 tick 任务；在 Paper 与 Folia 上功能一致。
 
 ## 已知限制
 
-- 假玩家镜头下，`blindness` 的雾/压天、`darkness`/`night_vision` 的雾也会生效，`slowness`/`speed` 会改变 FOV；`nausea`、亮度图等仍按真实玩家读取。未安装 PacketEvents 或假玩家创建失败时，效果退回旧行为（仅 `nausea` 完整、`darkness` 部分、`night_vision` 大部分）。详见 [docs/spectator-effects.md](docs/spectator-effects.md)。
-- 假玩家镜头不是完整客户端渲染：全屏渐变/黑场、水下/着火/方块贴脸等 `ScreenEffectRenderer` 叠加层仍不可用，FOV 也只能通过药水等级（`slowness`/`speed`）表达。
-- 假玩家是客户端侧实体，跨版本链路（ViaVersion/ViaBackwards）是否完整转发它的 PlayerInfo、属性和效果包取决于链路；建议在目标 26.1.2 原生客户端上验收 FOV 和画面效果。若链路不转发属性包，FOV 会保持 1.0，但镜头与其余效果不受影响。
-- 假玩家镜头的视角 yaw 通过原版 head-yaw 包同步：协议精度为 1/256 圈（约 1.40625°），客户端还会做 3 tick 插值。因此极慢的缓动平移可能有亚度级台阶或约 2–3 tick 的跟随滞后，快速转身约 150 ms 后到位；位置与 pitch 不受影响。这与盔甲架回退模式、旁观原版玩家时一致。
-- `cut` 本身在两种镜头模式下都是单帧切换、没有补间，不受上面的位置/head 插值影响；但盔甲架回退模式为了等客户端把镜头盔甲架插值到新位置，会额外用约 4 tick 完成解除、移动和重新锁定相机（这期间画面已经是目标镜头，步骤处理暂停），因此回退模式下每次硬切会比轨道时间轴多约 4 tick。
-- 镜头锁定期间，原版旁观者的数字键 1-9 和旁观菜单“传送到玩家”快捷方式会被忽略（服务端取消 `SPECTATE` 传送并重新锁定镜头，动作栏提示锁定），不会再因此提前结束播放；其他原因的外部传送仍会结束会话。
-- Folia 下镜头实体跨 region（例如远距离 `cut`）时，服务端会把旧镜头实体替换为新实体，并先清空一次旁观目标。事件层表现为一次 `PlayerStopSpectatingEntityEvent`；插件通过服务端 sneak 标记判断它并非玩家按 Shift，取消该事件并静默重新锁定镜头，因此不会结束预览、不会提示锁定、也不会触发 `allow-sneak-exit`。首次发生时会记录一条 `Server released the spectator camera ... without a Shift input` INFO 日志用于确认；Paper 上通常不会出现该分支（镜头实体不会被替换，除非其他插件或传送路径主动释放了相机）。
-- 自定义 `sway` 的 `yaw` 在部分客户端可能出现短促的水平回抽；预设档位 `yaw` 为 `0`，默认不会触发。
+- 假玩家镜头不是完整客户端渲染：全屏渐变/黑场、水下/着火/方块贴脸等叠加层不可用，FOV 只能通过药水等级（`slowness`/`speed`）表达。
+- 极慢的旋转镜头可能有轻微的台阶感与短暂跟随滞后（旁观原版玩家时也一样），位置与俯仰不受影响。
+- 通过 ViaVersion/ViaBackwards 等跨版本链路时，FOV 与部分画面效果可能不完整；建议在 26.1.2 原生客户端上确认效果。
 - 一条轨道只能属于一个世界。
-- 编辑器保存会重写整个 `tracks.yml`，只保留文件头注释。文件中存在无法解析的轨道时，编辑器会拒绝保存，需要先修复并执行 `/camerarail reload`。
-- 从选中步骤开始预览时，不会回放之前的 `effect` 和 `title` 步骤，也不会施加入场效果；从轨道起点开始的预览与真实播放一致，会施加入场效果。
+- 编辑器保存会重写整个 `tracks.yml`，只保留文件头注释；文件中存在无法解析的轨道时，编辑器会拒绝保存，需要先修复并执行 `/camerarail reload`。
 - 不支持循环轨道、多轨道叠加或任意命令步骤；流程编排交给其他插件。
-- 镜头锁定依赖客户端正确处理 `Set Camera` 包，少数第三方客户端或协议转换链路可能无法锁定旁观相机。
-- 精确同步依赖服务端映射字段；服务端改名时会自动退回默认的量化跟踪，播放仍可继续。
-- 定位条隐藏依赖 26.1.2 的 `waypoint_receive_range` 属性；服务端不提供该属性时只记录一次 WARN 并继续播放（定位条保持可见），不会中断镜头。
+- 镜头锁定依赖客户端支持原版的旁观相机切换；少数第三方客户端或跨版本链路可能无法锁定镜头。
+- 定位条隐藏依赖 26.1.2 服务端提供的对应属性；服务端不提供时会记录一次 WARN 并继续播放（定位条保持可见）。
+- 自定义 `sway` 的 `yaw` 在部分客户端可能出现短促的水平回抽；预设档位 `yaw` 为 `0`，默认不会触发。
 
-## 构建
-
-需要 Java 25 和 Maven：
-
-```text
-mvn test
-mvn package
-```
-
-产物为 `target/CameraRail-1.1.0.jar`。`mvn test` 覆盖缓动、路径曲线、摇摆、YAML 解析与写入、帮助页排版等单元测试。
+更深入的同步细节、协议限制与回退日志见 [实现说明](docs/implementation.md)。
 
 ## 文档
 
@@ -349,8 +343,25 @@ mvn package
 - [插件集成与事件](docs/integration.md)
 - [旁观者镜头下的药水效果与假玩家摄像机](docs/spectator-effects.md)
 - [定位条（locator bar）与播放期间隐藏](docs/locator-bar.md)
-- [本地验证与测试清单](docs/testing.md)
+- [实现说明](docs/implementation.md)
+
+## 构建
+
+需要 Java 25 和 Maven：
+
+```text
+mvn package
+```
+
+产物为 `target/CameraRail-1.1.0.jar`。运行 `mvn test` 可执行单元测试。
+
+## 反馈
+
+- 问题与建议：[GitHub Issues](https://github.com/RIA-AED/CameraRail/issues)
+- 版本更新：[GitHub Releases](https://github.com/RIA-AED/CameraRail/releases)
 
 ## 许可
 
-本项目由 RIA 维护。仓库目前未附带开源许可证文件，对外分发前请先联系维护者。
+CameraRail 由 RIA-AED 维护，基于 [MIT 许可证](LICENSE) 开源。你可以自由使用、修改、再发布和商用，只需保留版权声明与许可证文本。
+
+MIT 只覆盖本仓库的代码与文档；Minecraft 的素材与截图中的游戏内容版权归 Mojang 所有。

@@ -1,0 +1,135 @@
+# 实现说明
+
+本文面向维护者与排障，记录镜头同步、假玩家镜头和协议层面的细节。普通使用不需要阅读；
+功能、配置和用户可见的限制见 [README](../README.md)。
+
+## 镜头锚点
+
+服务端锚点是一个隐藏的普通（非 marker）盔甲架，玩家以旁观者身份附身到它；服务端每 tick
+更新实体姿态，客户端负责帧间插值，不会每 tick 传送玩家本体。
+
+镜头跨区块时，玩家实体跟随移动以保证区块加载；可以用轨道字段 `follow: false` 或
+`session.follow-camera: false` 关闭。
+
+镜头锁定期间，旁观者按数字键 1-9 或使用旁观菜单传送到其他玩家会被服务端处理为
+`TeleportCause.SPECTATE` 的本体传送；插件会取消该传送并重新锁定镜头，动作栏提示镜头仍在
+锁定中，不再把它当作外部传送而提前结束播放。其他原因的外部传送仍按原策略结束会话。
+
+## 假玩家镜头（PacketEvents）
+
+安装 PacketEvents 时，插件还会生成一个只存在于该客户端的 PLAYER 实体，并把发往盔甲架的
+`Set Camera` 包改写成假玩家 id。服务端 `getSpectatorTarget()` 仍是盔甲架，区块票据、每 tick
+吸附和跨区块跟随都不变；假玩家负责客户端的 Camera、FOV 和按镜头实体读取的效果。客户端
+旁观相机的视角取的是实体的 head yaw，而位置包只同步身体朝向，所以插件还要在量化后的
+head yaw 变化时逐 tick 下发 `EntityHeadLook`（假玩家没有服务端实体，原版实体跟踪不会替它发
+这个包）；否则画面 yaw 会停在进入镜头时的角度。
+
+假玩家的位置、pitch 和身体朝向每 3 tick 从同一份镜头姿态同步一次（与精确实体跟踪的节奏
+一致）；视角 yaw 的 head 同步则是每个镜头 tick 检查、量化值变化才发包。插件直接计算并下发
+假玩家的 `MOVEMENT_SPEED` 属性：客户端不会给客户端侧实体应用药水效果的属性修正，所以
+`slowness`/`speed` 的 FOV 必须走属性包。PacketEvents 不可用或假玩家生成失败时，自动保持原
+盔甲架镜头。
+
+假玩家镜头激活时**不会**向该客户端发送盔甲架实体：盔甲架只作为服务端 spectator target
+存在。只有假玩家不可用、回退到盔甲架镜头时才对玩家调用 `showEntity`。旁观者客户端能看见
+invisible 实体，若把盔甲架发给客户端，会在镜头位置出现半透明模型。
+
+第 2、10 tick 会重发一次 `Set Camera`，第 45 tick 检查客户端是否仍在发送自身移动包，未锁定
+时在控制台输出警告。
+
+## 硬切（cut）
+
+`cut` 硬切不走上面的客户端帧间插值，在两种镜头模式下都是单帧切换：
+
+- 假玩家镜头下，插件在硬切时销毁旧的客户端相机实体，按目标姿态重建假玩家实体，并在同一
+  tick 把 `Set Camera` 指向新实体（切换相机目标本身是瞬时的，新实体没有位置/头部插值状态），
+  同时把 `MOVEMENT_SPEED` 属性（`slowness`/`speed` 的 FOV）和 `blindness`/`darkness`/
+  `night_vision` 等镜头可见效果重新下发到新实体。
+- 盔甲架回退模式下，客户端会插值镜头盔甲架的位置和朝向（约 3 tick），直接传送会滑过去，
+  所以插件先解除相机、把玩家本体瞬移到硬切姿态（解除期间客户端相机就是玩家本体，画面已经
+  立即切到目标镜头），再移动盔甲架，约 4 tick 后等客户端追上再重新锁定相机。
+
+两种模式都没有补间；`cut` 的 `duration` 只控制跳转后的停留。回退模式下每次硬切会比轨道
+时间轴多约 4 tick。
+
+## 定位条隐藏
+
+播放期间通过给玩家加一个 transient 的 `waypoint_receive_range` 乘算修正符
+（`MULTIPLY_SCALAR_1 = -1`）隐藏原版定位条（locator bar）：相机锁定后隐藏，移除修正符即恢复
+（最多 1 tick 生效）。只增删本插件命名空间下的修正符，不读取/写回属性基础值，不碰其他插件的
+modifier，因此第三方对该属性的修改不会被覆盖；修正符不落盘，崩溃/重登不会残留。镜头 tick
+每 20 tick 在玩家调度器上复查一次（第三方清 modifiers、`/camerarail reload` 切换配置都会被
+纠正），所有结束/退出/恢复路径都会移除。实现见 `LocatorBarHider`，背景见
+[locator-bar.md](locator-bar.md)。
+
+## 精确同步与量化
+
+服务端镜头实体（含回退模式的盔甲架）使用精确位置同步模式（通过反射设置
+`requiresPrecisePosition`），让位置、pitch 和身体朝向走 float 的 `EntityPositionSync`；但客户端
+旁观相机的视角 yaw 来自 head yaw，协议只提供 1 字节（1/256 圈 = 1.40625°）的 `RotateHead`
+包并由客户端做 3 tick 插值，所以慢速旋转仍可能出现亚度级台阶与约 2–3 tick 的跟随滞后——
+这与旁观原版玩家一致，不是本插件能消除的量化。字段不可用时自动退回默认的实体跟踪。
+
+## 退出与传送重同步
+
+退出时先解除旁观/相机并恢复游戏模式、飞行状态和药水效果，清空残余速度后再把玩家传送到
+落点，并在 1 tick 后对同一落点再重同步一次传送：这样既避免客户端在相机锁定期间收到传送
+造成的位置确认相位错乱，也保证落点脚底位于方块表面之上（`ExitPlacement` 会抬升 0.1 mm 并在
+脚底嵌入方块碰撞体时抬到碰撞体顶，因为 `pose.y - eyeHeight` 的 float 误差会让脚底低约
+4.8e-9，GUI 取景的 6 位小数取整、潜行/游泳取景与站立恢复的眼高差也可能让脚底嵌进方块）。
+编辑器的“传送到此”使用同一套落点校正与重同步。
+
+退出与编辑器“传送到此”都会对同一落点发送两次传送（间隔约 1 tick）来重置客户端的传送确认
+状态；监听 `PlayerTeleportEvent` 的其他插件会看到两次 `PLUGIN` 传送。
+
+## Folia
+
+插件在 `plugin.yml` 中声明 `folia-supported: true`。镜头实体使用 `EntityScheduler`，玩家操作在
+玩家自己的 `EntityScheduler` 上执行；镜头和玩家传送均使用 `teleportAsync`，镜头所在区块通过
+插件区块票据保持加载，会话结束后释放。没有全局 tick 任务，每个会话只有一个镜头实体 tick
+任务。
+
+Folia 下镜头实体跨 region（例如远距离 `cut`）时，服务端会把旧镜头实体替换为新实体，并先清空
+一次旁观目标。事件层表现为一次 `PlayerStopSpectatingEntityEvent`；插件通过服务端 sneak 标记
+判断它并非玩家按 Shift，取消该事件并静默重新锁定镜头，因此不会结束预览、不会提示锁定、
+也不会触发 `allow-sneak-exit`。首次发生时会记录一条
+`Server released the spectator camera ... without a Shift input` INFO 日志用于确认；Paper 上通常
+不会出现该分支（镜头实体不会被替换，除非其他插件或传送路径主动释放了相机）。
+
+## 未安装 PacketEvents 时的提示
+
+没有安装 PacketEvents 时不会阻止插件运行，但会明确提示：
+
+- 启动日志为 WARN：`PacketEvents not installed; fake-player camera disabled...`；
+- 播放使用 `blindness`/`slowness`/`speed` 等镜头相关效果的轨道时，聊天栏提示当前是盔甲架
+  回退模式，控制台只对每条轨道警告一次；
+- 编辑器轨道概览显示“镜头模式: 盔甲架回退 · FOV/失明雾不可用”；
+- `/camerarail info <id>` 显示“镜头模式: 假玩家 (PacketEvents)”或“镜头模式: 盔甲架回退”；
+- 效果选择器摘要与效果表单显示回退说明；
+- `/camerarail edit effect add ...` 追加镜头相关效果后，聊天栏追加同样的提示。
+
+## 协议与兼容性限制
+
+- 假玩家镜头下，`blindness` 的雾/压天、`darkness`/`night_vision` 的雾也会生效，`slowness`/
+  `speed` 会改变 FOV；`nausea`、亮度图等仍按真实玩家读取。未安装 PacketEvents 或假玩家创建
+  失败时，效果退回旧行为（仅 `nausea` 完整、`darkness` 部分、`night_vision` 大部分）。详见
+  [spectator-effects.md](spectator-effects.md)。
+- 假玩家镜头不是完整客户端渲染：全屏渐变/黑场、水下/着火/方块贴脸等 `ScreenEffectRenderer`
+  叠加层仍不可用，FOV 也只能通过药水等级（`slowness`/`speed`）表达。
+- 假玩家是客户端侧实体，跨版本链路（ViaVersion/ViaBackwards）是否完整转发它的 PlayerInfo、
+  属性和效果包取决于链路；建议在目标 26.1.2 原生客户端上验收 FOV 和画面效果。若链路不转发
+  属性包，FOV 会保持 1.0，但镜头与其余效果不受影响。
+- 假玩家镜头的视角 yaw 通过原版 head-yaw 包同步：协议精度为 1/256 圈（约 1.40625°），客户端
+  还会做 3 tick 插值。因此极慢的缓动平移可能有亚度级台阶或约 2–3 tick 的跟随滞后，快速转身
+  约 150 ms 后到位；位置与 pitch 不受影响。这与盔甲架回退模式、旁观原版玩家时一致。
+- 镜头锁定依赖客户端正确处理 `Set Camera` 包，少数第三方客户端或协议转换链路可能无法锁定
+  旁观相机。
+- 精确同步依赖服务端映射字段；服务端改名时会自动退回默认的量化跟踪，播放仍可继续。
+- 定位条隐藏依赖 26.1.2 的 `waypoint_receive_range` 属性；服务端不提供该属性时只记录一次
+  WARN 并继续播放（定位条保持可见），不会中断镜头。
+- 一条轨道只能属于一个世界。
+- 如果 `world` 当前没有加载，轨道仍会加载，但播放时会提示世界缺失；世界加载后无需重载。
+- 单条轨道解析失败不会阻止其他轨道加载；`/camerarail reload` 时失败轨道会保留上一个可用
+  版本，并在控制台输出具体错误。
+
+本地验证与测试清单见 [testing.md](testing.md)。
