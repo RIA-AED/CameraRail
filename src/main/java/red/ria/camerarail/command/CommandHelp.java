@@ -42,9 +42,18 @@ public final class CommandHelp {
         PLAYBACK("playback"),
         EDITOR("editor"),
         MANAGE("manage"),
-        ENTER("enter"),
         SETTINGS("settings"),
+        ENTRY("entry"),
         STEP("step"),
+        MOVE("move"),
+        PATH("path"),
+        HOLD("hold"),
+        WAIT("wait"),
+        CUT("cut"),
+        EFFECT("effect"),
+        TITLE("title"),
+        POINT("point"),
+        STEP_OR_POINT("step-point"),
         PREVIEW("preview"),
         SAVE("save");
 
@@ -59,9 +68,34 @@ public final class CommandHelp {
         }
     }
 
-    private record Entry(String name, String syntax, Group group, List<String> permissions, List<String> aliases) {
+    /** What a stateless editor command addresses, used to render the usage line. */
+    private enum Level {
+        NONE,
+        TRACK,
+        STEP,
+        POINT,
+        TRACK_OR_STEP,
+        STEP_OR_POINT,
+        ANY
+    }
+
+    private record Entry(String name, String syntax, Group group, List<String> permissions,
+                         List<String> aliases, Level level, String usage) {
         Entry(String name, String syntax, Group group, List<String> permissions) {
-            this(name, syntax, group, permissions, List.of());
+            this(name, syntax, group, permissions, List.of(), Level.NONE, null);
+        }
+
+        Entry(String name, String syntax, Group group, List<String> permissions, Level level) {
+            this(name, syntax, group, permissions, List.of(), level, null);
+        }
+
+        Entry(String name, String syntax, Group group, List<String> permissions, List<String> aliases) {
+            this(name, syntax, group, permissions, aliases, Level.NONE, null);
+        }
+
+        /** @param usage the part after the target, when the overview {@code syntax} is not a command */
+        Entry(String name, String syntax, Group group, List<String> permissions, Level level, String usage) {
+            this(name, syntax, group, permissions, List.of(), level, usage);
         }
 
         boolean matches(String token) {
@@ -85,48 +119,69 @@ public final class CommandHelp {
             new Entry("play", "play <id> [玩家]", Group.PLAYBACK, PLAY),
             new Entry("stop", "stop [玩家]", Group.PLAYBACK, STOP),
             new Entry("advance", "advance <信号|*> [玩家]", Group.PLAYBACK, ADVANCE),
-            new Entry("edit", "edit", Group.EDITOR, EDIT),
+            new Entry("edit", "edit <目标> <动作> [参数]", Group.EDITOR, EDIT),
+            new Entry("editor", "editor [<轨道>|close]", Group.EDITOR, EDIT),
+            new Entry("tools", "tools", Group.EDITOR, EDIT),
             new Entry("create", "create <id> [名称]", Group.MANAGE, MANAGE),
             new Entry("delete", "delete <id> confirm", Group.MANAGE, MANAGE),
             new Entry("reload", "reload", Group.MANAGE, RELOAD)
     );
 
+    /**
+     * The stateless editor commands, grouped exactly like the Dialog screens: track settings,
+     * entry effects, the step collection, one row per step type, path points, then the session
+     * actions. The target prefix is explained once in the overview instead of on every row.
+     */
     private static final List<Entry> EDITOR_ENTRIES = List.of(
-            new Entry("gui", "gui", Group.ENTER, EDIT),
-            new Entry("status", "status", Group.ENTER, EDIT),
-            new Entry("list", "list", Group.ENTER, EDIT),
-            new Entry("help", "help [命令]", Group.ENTER, EDIT),
-            new Entry("done", "done|close", Group.ENTER, EDIT, List.of("close")),
-            new Entry("open", "open <id>", Group.SETTINGS, EDIT),
-            new Entry("create", "create <id> [名称]", Group.SETTINGS, MANAGE),
-            new Entry("delete", "delete [confirm]", Group.SETTINGS, MANAGE),
-            new Entry("start", "start", Group.SETTINGS, EDIT),
-            new Entry("exit", "exit", Group.SETTINGS, EDIT),
-            new Entry("exit-mode", "exit-mode <animation-end|pre-entry>", Group.SETTINGS, EDIT),
-            new Entry("display", "display <名称>", Group.SETTINGS, EDIT),
-            new Entry("track-sway", "track-sway <预设>", Group.SETTINGS, EDIT),
-            new Entry("follow", "follow <true|false>", Group.SETTINGS, EDIT),
-            new Entry("add", "add [时长]", Group.STEP, EDIT),
-            new Entry("cut", "cut [时长]", Group.STEP, EDIT),
-            new Entry("path", "path", Group.STEP, EDIT),
-            new Entry("point", "point", Group.STEP, EDIT),
-            new Entry("unpoint", "unpoint", Group.STEP, EDIT),
-            new Entry("hold", "hold <时长>", Group.STEP, EDIT),
-            new Entry("wait", "wait <信号> [超时]", Group.STEP, EDIT),
-            new Entry("effect", "effect <add|remove> <效果> [等级] [时长]", Group.STEP, EDIT),
-            new Entry("title", "title <fade-in> <stay> <fade-out> <文本>", Group.STEP, EDIT),
-            new Entry("here", "here", Group.STEP, EDIT),
-            new Entry("select", "select <索引>", Group.STEP, EDIT),
-            new Entry("duration", "duration <时长>", Group.STEP, EDIT),
-            new Entry("easing", "easing <曲线>", Group.STEP, EDIT),
-            new Entry("sway", "sway <预设>", Group.STEP, EDIT),
-            new Entry("up", "up", Group.STEP, EDIT),
-            new Entry("down", "down", Group.STEP, EDIT),
-            new Entry("remove", "remove", Group.STEP, EDIT),
-            new Entry("undo", "undo", Group.STEP, EDIT),
-            new Entry("preview", "preview", Group.PREVIEW, EDIT),
-            new Entry("stop", "stop", Group.PREVIEW, EDIT),
-            new Entry("save", "save", Group.SAVE, EDIT)
+            new Entry("display", "display <名称>", Group.SETTINGS, EDIT, Level.TRACK),
+            new Entry("description", "description [说明]", Group.SETTINGS, EDIT, Level.TRACK),
+            new Entry("start", "start [x y z [yaw pitch]]", Group.SETTINGS, EDIT, Level.TRACK),
+            new Entry("exit", "exit [x y z [yaw pitch]]", Group.SETTINGS, EDIT, Level.TRACK),
+            new Entry("exit-mode", "exit-mode <模式>", Group.SETTINGS, EDIT, Level.TRACK),
+            new Entry("sway", "sway <预设> [周期]", Group.SETTINGS, EDIT, Level.TRACK),
+            new Entry("follow", "follow <true|false>", Group.SETTINGS, EDIT, Level.TRACK),
+            new Entry("entry", "entry <list|add|set|remove>", Group.ENTRY, EDIT, Level.TRACK),
+            new Entry("list", "list", Group.STEP, EDIT, Level.TRACK),
+            new Entry("add", "add <类型> [参数]", Group.STEP, EDIT, Level.TRACK),
+            new Entry("remove", "remove", Group.STEP, EDIT, Level.STEP_OR_POINT),
+            new Entry("duplicate", "duplicate", Group.STEP, EDIT, Level.STEP),
+            new Entry("up", "up", Group.STEP, EDIT, Level.STEP_OR_POINT),
+            new Entry("down", "down", Group.STEP, EDIT, Level.STEP_OR_POINT),
+            new Entry("move", "move: here|pos|duration|easing|sway", Group.MOVE, EDIT, Level.STEP,
+                    "<here|pos|duration|easing|sway>"),
+            new Entry("path", "path: duration|easing|sway|point", Group.PATH, EDIT, Level.STEP,
+                    "<duration|easing|sway|point>"),
+            new Entry("hold", "hold: duration|sway", Group.HOLD, EDIT, Level.STEP,
+                    "<duration|sway>"),
+            new Entry("wait", "wait: signal|timeout|sway", Group.WAIT, EDIT, Level.STEP,
+                    "<signal|timeout|sway>"),
+            new Entry("cut", "cut: here|pos|duration|sway", Group.CUT, EDIT, Level.STEP,
+                    "<here|pos|duration|sway>"),
+            new Entry("effect", "effect <add|remove> <效果>", Group.EFFECT, EDIT, Level.STEP),
+            new Entry("title", "title|subtitle|fade", Group.TITLE, EDIT, Level.STEP,
+                    "<title [文本]|subtitle [文本]|fade>"),
+            new Entry("point", "point <list|add>", Group.POINT, EDIT, Level.STEP),
+            new Entry("here", "here", Group.STEP_OR_POINT, EDIT, Level.STEP_OR_POINT),
+            new Entry("pos", "pos <x> <y> <z> [yaw] [pitch]", Group.STEP_OR_POINT, EDIT, Level.STEP_OR_POINT),
+            new Entry("insert", "insert", Group.POINT, EDIT, Level.POINT),
+            new Entry("preview", "preview", Group.PREVIEW, EDIT, Level.TRACK_OR_STEP),
+            new Entry("stop", "stop", Group.PREVIEW, EDIT, Level.ANY),
+            new Entry("undo", "undo", Group.SAVE, EDIT, Level.TRACK),
+            new Entry("save", "save", Group.SAVE, EDIT, Level.TRACK)
+    );
+
+    /**
+     * Step fields that get their own detail page but are never a top-level command row: they
+     * always take a step target ({@code edit <轨道:步骤> duration 120}). They are reachable
+     * through {@code /camerarail help edit <字段>} and tab completion, but not the overview.
+     */
+    private static final List<Entry> EDITOR_TOPICS = List.of(
+            new Entry("duration", "duration <tick>", Group.STEP, EDIT, Level.STEP),
+            new Entry("easing", "easing <曲线>", Group.STEP, EDIT, Level.STEP),
+            new Entry("signal", "signal <信号>", Group.STEP, EDIT, Level.STEP),
+            new Entry("timeout", "timeout <tick>", Group.STEP, EDIT, Level.STEP),
+            new Entry("subtitle", "subtitle [文本]", Group.TITLE, EDIT, Level.STEP),
+            new Entry("fade", "fade <淡入> <停留> <淡出>", Group.TITLE, EDIT, Level.STEP)
     );
 
     private static final Component RAIL = Component.text("▏", NamedTextColor.DARK_GRAY);
@@ -163,6 +218,14 @@ public final class CommandHelp {
             names.add(entry.name());
             names.addAll(entry.aliases());
         }
+        if (scope == Scope.EDITOR) {
+            for (Entry topic : EDITOR_TOPICS) {
+                if (permitted(topic)) {
+                    names.add(topic.name());
+                    names.addAll(topic.aliases());
+                }
+            }
+        }
         return names;
     }
 
@@ -190,6 +253,11 @@ public final class CommandHelp {
         lines.add(messages.prefixed("help.title",
                 "scope", text("help.scope." + scope.key()),
                 "command", commandRoot(scope)));
+        if (scope == Scope.EDITOR) {
+            // The stateless actions all take the same target prefix, so it is explained once.
+            lines.add(body(messages.component("help.target-hint")));
+            lines.add(body(messages.component("help.target-hint-escape")));
+        }
         List<Entry> visible = visible(scope);
         if (visible.isEmpty()) {
             lines.add(body(messages.component("help.no-commands")));
@@ -436,6 +504,13 @@ public final class CommandHelp {
                 return entry;
             }
         }
+        if (scope == Scope.EDITOR) {
+            for (Entry topic : EDITOR_TOPICS) {
+                if (topic.matches(name)) {
+                    return topic;
+                }
+            }
+        }
         return null;
     }
 
@@ -444,12 +519,32 @@ public final class CommandHelp {
     }
 
     private String fullUsage(Scope scope, Entry entry) {
-        return commandRoot(scope) + " " + entry.syntax();
+        String syntax = entry.usage() == null ? entry.syntax() : entry.usage();
+        if (scope == Scope.EDITOR && entry.level() != Level.NONE) {
+            return commandRoot(scope) + " " + targetHint(entry.level()) + " " + syntax;
+        }
+        return commandRoot(scope) + " " + syntax;
     }
 
     private String suggestion(Scope scope, Entry entry) {
         // Stop before the first argument: the player types it instead of deleting a placeholder.
+        // Stateless editor commands start with their target, so the click only fills the root.
+        if (scope == Scope.EDITOR && entry.level() != Level.NONE) {
+            return commandRoot(scope) + " ";
+        }
         return commandRoot(scope) + " " + entry.name() + " ";
+    }
+
+    private static String targetHint(Level level) {
+        return switch (level) {
+            case TRACK -> "<轨道>";
+            case STEP -> "<轨道:步骤>";
+            case POINT -> "<轨道:步骤:路径点>";
+            case TRACK_OR_STEP -> "<轨道[:步骤]>";
+            case STEP_OR_POINT -> "<轨道:步骤[:路径点]>";
+            case ANY -> "<轨道[:步骤[:路径点]]>";
+            case NONE -> "";
+        };
     }
 
     private String summaryKey(Scope scope, Entry entry) {

@@ -14,7 +14,6 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.event.ClickCallback;
 import net.kyori.adventure.text.event.HoverEvent;
 import net.kyori.adventure.text.format.NamedTextColor;
-import net.kyori.adventure.text.minimessage.MiniMessage;
 import red.ria.camerarail.api.CameraTrackEndEvent;
 import red.ria.camerarail.config.RailConfig;
 import red.ria.camerarail.config.TrackRepository;
@@ -66,7 +65,6 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 import java.util.logging.Level;
-import java.util.regex.Pattern;
 
 /**
  * Full-screen Dialog editor. Every screen is a Paper Dialog; the player never types a
@@ -78,12 +76,16 @@ public final class EditorUI implements Listener {
     private static final int BODY_WIDTH = 320;
     private static final int BUTTON_WIDTH = 220;
     private static final int GRID_WIDTH = 150;
-    private static final Pattern ID_PATTERN = Pattern.compile("[a-z0-9][a-z0-9_-]{0,63}");
-    private static final MiniMessage STRICT = MiniMessage.builder().strict(true).build();
     private static final ClickCallback.Options CLICK = ClickCallback.Options.builder()
             .uses(1)
             .lifetime(Duration.ofHours(1))
             .build();
+    /**
+     * A dialog with {@code afterAction(CLOSE)} closes after its click callback; a screen opened
+     * in the same tick can be swallowed by that close. Chained navigation therefore waits two
+     * ticks, which also matches a player's frame time.
+     */
+    private static final long DIALOG_ACTION_DELAY_TICKS = 2L;
     private static final List<EffectChoice> COMMON_EFFECTS = List.of(
             new EffectChoice("blindness", "失明 (blindness)"),
             new EffectChoice("darkness", "黑暗 (darkness)"),
@@ -114,6 +116,9 @@ public final class EditorUI implements Listener {
     private final Supplier<Messages> messages;
     /** Players whose UI-started preview should reopen the editor when it ends. */
     private final Set<UUID> reopenAfterPreview = ConcurrentHashMap.newKeySet();
+    /** Opens the tool chest GUI; injected by the plugin to keep the item tools optional. */
+    private Consumer<Player> toolMenu = player -> {
+    };
 
     public EditorUI(Plugin plugin, EditorManager editors, TrackRepository repository,
                     Supplier<RailConfig> config, Supplier<Messages> messages) {
@@ -122,6 +127,16 @@ public final class EditorUI implements Listener {
         this.repository = repository;
         this.config = config;
         this.messages = messages;
+    }
+
+    /** Wires the "编辑工具" buttons to the item-tool manager. */
+    public void setToolMenu(Consumer<Player> toolMenu) {
+        this.toolMenu = toolMenu;
+    }
+
+    private void openToolMenu(Player player) {
+        player.closeDialog();
+        toolMenu.accept(player);
     }
 
     // ------------------------------------------------------------------ entry points
@@ -228,6 +243,7 @@ public final class EditorUI implements Listener {
         if (player.hasPermission("camerarail.manage")) {
             buttons.add(button(submenu("新建轨道"), "以当前视角创建一条轨道", p -> showCreateTrack(p, null, null)));
         }
+        buttons.add(button(submenu("编辑工具"), "领取取景工具与预览工具，边走边取点", p -> openToolMenu(p)));
         buttons.add(button("刷新", "重新列出内存中的轨道", p -> showTrackList(p, current, null)));
 
         Component summary = tracks.isEmpty()
@@ -235,7 +251,7 @@ public final class EditorUI implements Listener {
                 : text("共 " + tracks.size() + " 条 · 第 " + (current + 1) + "/"
                         + pageCount(tracks.size()) + " 页", NamedTextColor.GRAY);
         show(player, dialog(text("镜头轨道", NamedTextColor.WHITE),
-                body(notice, summary), List.of(), buttons, 1));
+                body(notice, summary), List.of(), buttons, 2));
     }
 
     private Component trackTooltip(CameraTrack track) {
@@ -274,7 +290,7 @@ public final class EditorUI implements Listener {
     private void createTrack(Player player, Map<String, String> values) {
         String id = value(values, "track_id", "").trim().toLowerCase(Locale.ROOT);
         String display = value(values, "display", "").trim();
-        if (!ID_PATTERN.matcher(id).matches()) {
+        if (!TrackRules.isValidId(id)) {
             showCreateTrack(player, values, notice("id 只能包含小写字母、数字、- 和 _，最长 64 个字符.", true));
             return;
         }
@@ -321,6 +337,7 @@ public final class EditorUI implements Listener {
         buttons.add(button(submenu("轨道设置"), "摇摆 " + preset + " · 跟随"
                 + (track.follow() ? "开" : "关"),
                 p -> showTrackSettings(p, null, null)));
+        buttons.add(button(submenu("编辑工具"), "领取取景工具与预览工具，边走边取点", p -> openToolMenu(p)));
         int entryEffectCount = track.entryEffects().size();
         buttons.add(button(submenu("入场效果 (" + entryEffectCount + ")"),
                 entryEffectCount + " 个 · 点击管理入场效果",
@@ -364,7 +381,7 @@ public final class EditorUI implements Listener {
         Dialog dialog = confirmation(text("删除轨道", NamedTextColor.RED), body(null,
                         text("删除 " + session.draft.id() + "？此操作不可撤销.", NamedTextColor.GRAY)),
                 "删除", p -> {
-                    editors.delete(p, true);
+                    editors.delete(p);
                     if (editors.session(p) != null) {
                         showTrack(p, notice("无法删除：可能有其他管理员正在编辑这条轨道.", true));
                     } else {
@@ -599,7 +616,7 @@ public final class EditorUI implements Listener {
                     + " · 第 " + (current + 1) + "/" + pageCount(steps.size()) + " 页", NamedTextColor.GRAY);
         }
         show(player, dialog(text("步骤 · " + session.draft.id(), NamedTextColor.WHITE),
-                body(notice, summary), List.of(), buttons, 1));
+                body(notice, summary), List.of(), buttons, 2));
     }
 
     private String stepMeta(CameraTrack track, int index) {
@@ -770,15 +787,16 @@ public final class EditorUI implements Listener {
         buttons.add(formButton("保存并返回", "保存上方数值后回到步骤列表", BUTTON_WIDTH, reader,
                 (p, raw) -> saveExplicitly(p, raw, save,
                         q -> afterStepSaved(q, index, adding, true))));
-        buttons.add(formButton("取当前视角", "立即把当前视角保存为这一步的目标", BUTTON_WIDTH, reader,
-                (p, raw) -> capturePose(p, false, captured -> {
+        buttons.add(captureFormButton("取当前视角", "立即把当前视角保存为这一步的目标", false, reader,
+                (p, raw, captured) -> {
                     Map<String, String> next = merge(shown, input(raw));
                     putPose(next, captured);
                     if (save.save(p, next) != SaveOutcome.FAILED) {
                         afterStepSaved(p, index, adding, false);
                     }
-                }, error -> showMoveForm(cut, p, index, adding, step, merge(shown, input(raw)),
-                        notice(error, true)))));
+                },
+                (p, raw, error) -> showMoveForm(cut, p, index, adding, step, merge(shown, input(raw)),
+                        notice(error, true))));
         buttons.add(formButton("传送到此", "先保存上方数值，再传送到这一步的目标位置；/camerarail edit 回来",
                 BUTTON_WIDTH, reader, (p, raw) -> {
                     Map<String, String> input = input(raw);
@@ -946,7 +964,7 @@ public final class EditorUI implements Listener {
                         + (signals.size() > PAGE_SIZE
                         ? " · 第 " + (current + 1) + "/" + pageCount(signals.size()) + " 页" : "");
         show(player, dialog(text("已有信号", NamedTextColor.WHITE),
-                body(notice, text(summary, NamedTextColor.GRAY)), List.of(), buttons, 1,
+                body(notice, text(summary, NamedTextColor.GRAY)), List.of(), buttons, 2,
                 button(back("返回"), "回到等待步骤表单，保留当前输入",
                         p -> showWaitForm(p, index, adding, step, values, null))));
     }
@@ -983,7 +1001,7 @@ public final class EditorUI implements Listener {
                 + (COMMON_EFFECTS.size() > PAGE_SIZE
                 ? " · 第 " + (current + 1) + "/" + pageCount(COMMON_EFFECTS.size()) + " 页" : "");
         show(player, dialog(text("常用效果", NamedTextColor.WHITE),
-                body(null, text(summary, NamedTextColor.GRAY)), List.of(), buttons, 1,
+                body(null, text(summary, NamedTextColor.GRAY)), List.of(), buttons, 2,
                 button(back("返回"), "回到效果表单，保留当前输入", p -> onBack.accept(p, values))));
     }
 
@@ -1132,7 +1150,7 @@ public final class EditorUI implements Listener {
         try {
             EffectAction action = EffectAction.parse(value(raw, "action", "add"));
             String key = value(raw, "effect", "").trim();
-            PotionEffectType type = EditorManager.resolveEffect(key);
+            PotionEffectType type = CameraEffects.resolveEffect(key);
             if (type == null) {
                 throw new FormException("未知的药水效果 " + key + ".");
             }
@@ -1398,16 +1416,16 @@ public final class EditorUI implements Listener {
         if (current < pageCount(path.points().size()) - 1) {
             buttons.add(button("下一页", "下一页路径点", p -> showPathPoints(p, current + 1, null)));
         }
-        buttons.add(button("追加当前视角", "关闭窗口，立即把当前视角追加为路径点并保存", p ->
-                capturePose(p, false, pose -> appendPathPoint(p, pose),
-                        error -> showPathPoints(p, current, notice(error, true)))));
+        buttons.add(captureButton("追加当前视角", "关闭窗口，立即把当前视角追加为路径点并保存", false,
+                (p, pose) -> appendPathPoint(p, pose),
+                (p, error) -> showPathPoints(p, current, notice(error, true))));
         buttons.add(button(back("返回"), "回到路径步骤表单", p -> showEditStepForm(p, session.selected, null, null)));
 
         show(player, dialog(text("路径点 · 步骤 " + (session.selected + 1), NamedTextColor.WHITE),
                 body(notice, text(path.points().size() + " 个点 · " + ticksLabel(path.durationTicks())
                         + " · " + easingName(path.easing()) + " · 第 " + (current + 1) + "/"
                         + pageCount(path.points().size()) + " 页", NamedTextColor.GRAY)),
-                List.of(), buttons, 1));
+                List.of(), buttons, 2));
     }
 
     private void appendPathPoint(Player player, Pose pose) {
@@ -1467,10 +1485,10 @@ public final class EditorUI implements Listener {
         buttons.add(formButton("保存", "保存上方编辑框中的坐标", BUTTON_WIDTH, reader,
                 (p, raw) -> saveExplicitly(p, raw, save, q ->
                         showPathPointForm(q, pointIndex, null, notice("已保存路径点.", false)))));
-        buttons.add(formButton("取当前视角", "立即把当前视角保存到这个路径点", BUTTON_WIDTH, reader,
-                (p, raw) -> capturePose(p, false, captured -> saveCapturedPathPoint(p, pointIndex, captured),
-                        error -> showPathPointForm(p, pointIndex, merge(shown, input(raw)),
-                                notice(error, true)))));
+        buttons.add(captureFormButton("取当前视角", "立即把当前视角保存到这个路径点", false, reader,
+                (p, raw, captured) -> saveCapturedPathPoint(p, pointIndex, captured),
+                (p, raw, error) -> showPathPointForm(p, pointIndex, merge(shown, input(raw)),
+                        notice(error, true))));
         buttons.add(formButton("传送到此", "先保存上方坐标，再传送到这个路径点；/camerarail edit 回来",
                 BUTTON_WIDTH, reader, (p, raw) -> {
                     Map<String, String> userInput = input(raw);
@@ -1479,15 +1497,15 @@ public final class EditorUI implements Listener {
                     }
                     teleportToPose(p, parsePose(userInput), false);
                 }));
-        buttons.add(formButton("插入当前视角", "先保存上方坐标，再在这个点之后插入当前视角",
-                BUTTON_WIDTH, reader, (p, raw) -> {
+        buttons.add(captureFormButton("插入当前视角", "先保存上方坐标，再在这个点之后插入当前视角",
+                false, reader, (p, raw, captured) -> {
                     if (save.save(p, input(raw)) == SaveOutcome.FAILED) {
                         return;
                     }
-                    capturePose(p, false, captured -> insertPathPoint(p, pointIndex, captured),
-                            error -> showPathPointForm(p, pointIndex, merge(shown, input(raw)),
-                                    notice(error, true)));
-                }));
+                    insertPathPoint(p, pointIndex, captured);
+                },
+                (p, raw, error) -> showPathPointForm(p, pointIndex, merge(shown, input(raw)),
+                        notice(error, true))));
         if (pointIndex > 0) {
             buttons.add(saveAction("<- 上一步", "先保存上方坐标，再切到上一个路径点", reader, save,
                     (p, outcome) -> showPathPointForm(p, pointIndex - 1, null, savedNotice(outcome))));
@@ -1694,11 +1712,11 @@ public final class EditorUI implements Listener {
                         showExitMode(q, notice("自定义退出点已保存.", false));
                     }
                 })));
-        buttons.add(formButton(target == PoseTarget.EXIT ? "取当前脚下位置" : "取当前视角",
+        buttons.add(captureFormButton(target == PoseTarget.EXIT ? "取当前脚下位置" : "取当前视角",
                 target == PoseTarget.EXIT ? "立即把当前脚下位置保存为退出点" : "立即把当前视角保存为起点",
-                BUTTON_WIDTH, reader, (p, raw) -> capturePose(p, target == PoseTarget.EXIT,
-                captured -> saveCapturedPose(p, target, captured),
-                error -> showPoseForm(p, target, merge(shown, input(raw)), notice(error, true)))));
+                target == PoseTarget.EXIT, reader,
+                (p, raw, captured) -> saveCapturedPose(p, target, captured),
+                (p, raw, error) -> showPoseForm(p, target, merge(shown, input(raw)), notice(error, true))));
         if (target == PoseTarget.START) {
             buttons.add(saveAction("传送到此", "先保存上方坐标，再传送到起点位置；/camerarail edit 回来",
                     reader, save, (p, outcome) -> teleportToPose(p, savedPose(p, target), false)));
@@ -1818,7 +1836,7 @@ public final class EditorUI implements Listener {
         lines.add(text(effects.size() + " 个 · 第 " + (current + 1) + "/"
                 + pageCount(effects.size()) + " 页 · 进入镜头前施加", NamedTextColor.GRAY));
         show(player, dialog(text("入场效果 · " + session.draft.id(), NamedTextColor.WHITE),
-                body(notice, lines.toArray(Component[]::new)), List.of(), buttons, 1));
+                body(notice, lines.toArray(Component[]::new)), List.of(), buttons, 2));
     }
 
     private void showEntryEffectForm(Player player, int index, Map<String, String> values, Notice notice) {
@@ -1891,7 +1909,7 @@ public final class EditorUI implements Listener {
         }
         try {
             String key = value(raw, "effect", "").trim();
-            PotionEffectType type = EditorManager.resolveEffect(key);
+            PotionEffectType type = CameraEffects.resolveEffect(key);
             if (type == null) {
                 throw new FormException("未知的药水效果 " + key + ".");
             }
@@ -2063,15 +2081,21 @@ public final class EditorUI implements Listener {
     }
 
     /**
-     * Captures the player's current eye/feet pose and hands it to {@code then} one tick later.
-     * Any failure is reported through {@code onFailure} so a caller that owns a form can reopen
-     * it with the typed values instead of dropping the player on another screen; when no handler
-     * is given the editor falls back to the track overview.
+     * Captures the player's current eye/feet pose immediately (the caller runs in the dialog's
+     * click callback) and hands it to {@code then} after {@link #DIALOG_ACTION_DELAY_TICKS}, so
+     * the save/navigation part still happens after the dialog's close action while the pose is
+     * the one the player saw when clicking. Any failure is reported through {@code onFailure} so
+     * a caller that owns a form can reopen it with the typed values instead of dropping the
+     * player on another screen; when no handler is given the editor falls back to the track
+     * overview.
      */
     private void capturePose(Player player, boolean feet, Consumer<Pose> then, Consumer<String> onFailure) {
         EditorSession session = editors.session(player);
         if (session == null) {
-            showTrackList(player, 0, null);
+            // Reached from a click callback: delay the replacement screen so the current dialog's
+            // afterAction(CLOSE) cannot swallow it.
+            player.getScheduler().execute(plugin, () -> showTrackList(player, 0, null), () -> {
+            }, DIALOG_ACTION_DELAY_TICKS);
             return;
         }
         if (session.previewing) {
@@ -2111,15 +2135,17 @@ public final class EditorUI implements Listener {
                 captureFailed(player, onFailure, message(exception));
             }
         }, () -> {
-        }, 1L);
+        }, DIALOG_ACTION_DELAY_TICKS);
     }
 
     private void captureFailed(Player player, Consumer<String> onFailure, String text) {
         if (onFailure != null) {
             onFailure.accept(text);
-        } else {
-            showTrack(player, notice(text, true));
+            return;
         }
+        // No form to reopen: delay the overview for the same afterAction(CLOSE) reason.
+        player.getScheduler().execute(plugin, () -> showTrack(player, notice(text, true)), () -> {
+        }, DIALOG_ACTION_DELAY_TICKS);
     }
 
     private Pose eyePose(Player player) {
@@ -2247,8 +2273,10 @@ public final class EditorUI implements Listener {
             if (!(audience instanceof Player player)) {
                 return;
             }
+            // The dialog's afterAction(CLOSE) is applied after this callback; opening the next
+            // screen in the same tick can be overwritten by that close, so give it two ticks.
             player.getScheduler().execute(plugin, () -> action.accept(player), () -> {
-            }, 0L);
+            }, DIALOG_ACTION_DELAY_TICKS);
         }, CLICK));
     }
 
@@ -2269,7 +2297,72 @@ public final class EditorUI implements Listener {
                     }
                     T finalValue = value;
                     player.getScheduler().execute(plugin, () -> action.accept(player, finalValue), () -> {
-                    }, 0L);
+                    }, DIALOG_ACTION_DELAY_TICKS);
+                }, CLICK));
+    }
+
+    /** Receives the values read at click time and the pose captured at click time. */
+    @FunctionalInterface
+    private interface CapturedFormAction {
+        void accept(Player player, Map<String, String> raw, Pose pose);
+    }
+
+    /** Reopens a form with the values typed at click time when the capture failed. */
+    @FunctionalInterface
+    private interface CapturedFormFailure {
+        void accept(Player player, Map<String, String> raw, String error);
+    }
+
+    /** A capture action without form values (list buttons such as "追加当前视角"). */
+    @FunctionalInterface
+    private interface CapturedAction {
+        void accept(Player player, Pose pose);
+    }
+
+    /**
+     * A button that captures the player's pose in the click callback, i.e. the view the player
+     * has when clicking, instead of after the two-tick dialog-close delay. The save/navigation
+     * part still waits {@link #DIALOG_ACTION_DELAY_TICKS} (inside {@link #capturePose}), so the
+     * dialog's {@code afterAction(CLOSE)} cannot swallow the next screen, and the "save the fields
+     * first" order is preserved. A failed capture reopens the form with the click-time values,
+     * also after the delay for the same reason.
+     */
+    private ActionButton captureFormButton(String label, String tooltip, boolean feet,
+                                           Function<DialogResponseView, Map<String, String>> reader,
+                                           CapturedFormAction action, CapturedFormFailure onFailure) {
+        return ActionButton.create(text(label, NamedTextColor.WHITE),
+                text(tooltip == null ? "" : tooltip, NamedTextColor.GRAY), BUTTON_WIDTH,
+                DialogAction.customClick((response, audience) -> {
+                    if (!(audience instanceof Player player)) {
+                        return;
+                    }
+                    Map<String, String> raw;
+                    try {
+                        raw = input(reader.apply(response));
+                    } catch (RuntimeException exception) {
+                        raw = Map.of();
+                    }
+                    Map<String, String> values = raw;
+                    capturePose(player, feet, pose -> action.accept(player, values, pose),
+                            error -> player.getScheduler().execute(plugin,
+                                    () -> onFailure.accept(player, values, error), () -> {
+                                    }, DIALOG_ACTION_DELAY_TICKS));
+                }, CLICK));
+    }
+
+    /** The reader-less variant of {@link #captureFormButton} used by list screens. */
+    private ActionButton captureButton(String label, String tooltip, boolean feet,
+                                       CapturedAction action, BiConsumer<Player, String> onFailure) {
+        return ActionButton.create(text(label, NamedTextColor.WHITE),
+                text(tooltip == null ? "" : tooltip, NamedTextColor.GRAY), BUTTON_WIDTH,
+                DialogAction.customClick((response, audience) -> {
+                    if (!(audience instanceof Player player)) {
+                        return;
+                    }
+                    capturePose(player, feet, pose -> action.accept(player, pose),
+                            error -> player.getScheduler().execute(plugin,
+                                    () -> onFailure.accept(player, error), () -> {
+                                    }, DIALOG_ACTION_DELAY_TICKS));
                 }, CLICK));
     }
 
@@ -2619,13 +2712,9 @@ public final class EditorUI implements Listener {
     }
 
     private static void validateMiniMessage(String text, String label) {
-        if (text == null || text.isBlank()) {
-            return;
-        }
-        try {
-            STRICT.deserialize(text);
-        } catch (RuntimeException exception) {
-            throw new FormException(label + "不是合法的 MiniMessage.");
+        String error = TrackRules.validateMiniMessage(text, label);
+        if (error != null) {
+            throw new FormException(error);
         }
     }
 
@@ -2732,7 +2821,7 @@ public final class EditorUI implements Listener {
     }
 
     private static EffectStep effectStep(String key, EffectAction action, int amplifier, int duration) {
-        PotionEffectType type = EditorManager.resolveEffect(key);
+        PotionEffectType type = CameraEffects.resolveEffect(key);
         if (type == null) {
             throw new FormException("未知的药水效果 " + key + ".");
         }

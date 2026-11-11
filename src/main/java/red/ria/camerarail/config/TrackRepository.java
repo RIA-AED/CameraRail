@@ -17,6 +17,8 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -29,9 +31,22 @@ public final class TrackRepository {
     private final Logger logger;
     private final File file;
     private final ExecutorService writerExecutor;
+    /**
+     * Guards every read-compute-write cycle on {@link #tracks} as well as the whole-map
+     * replacement done by the reload path. The map itself is an immutable snapshot published
+     * through the volatile field, so reads stay lock-free.
+     */
+    private final Object writeLock = new Object();
     private volatile TrackParser parser;
     private volatile RailConfig config;
     private volatile Map<String, CameraTrack> tracks = Map.of();
+    /** Told when a track is deleted, outside the write lock. */
+    private volatile Consumer<String> trackDeletedListener;
+    /**
+     * Told after a non-fatal tracks.yml reload, inside the write lock (so listeners run in the
+     * same order as writes: write lock, then their own state).
+     */
+    private volatile Runnable reloadListener;
     /**
      * True when the last read found malformed hand-written sections. Writing the in-memory
      * map would silently delete those sections, so persistence is blocked until the file
@@ -64,6 +79,12 @@ public final class TrackRepository {
 
     /**
      * Reads the file and keeps the old version of any track that fails to parse.
+     *
+     * <p>The whole read-replace section runs under the same write lock as
+     * {@link #compute(String, UnaryOperator)}: a command edit can either finish before the file is
+     * read (and is therefore reloaded too) or wait until the new map is published. Without that
+     * lock an edit slipping between the read and the swap would be undone in memory while its
+     * queued save could still write the older file content.</p>
      */
     public LoadReport reload() {
         // A delete/create may still be queued on the writer. Flush before reading so a
@@ -74,11 +95,39 @@ public final class TrackRepository {
             logger.log(Level.WARNING, "Timed out waiting for pending tracks.yml writes before reload",
                     exception);
         }
-        LoadReport report = read();
-        applyReport(report, tracks);
-        writeBlocked = report.fatal() || !report.errors().isEmpty();
-        logReport(report);
-        return report;
+        synchronized (writeLock) {
+            LoadReport report = read();
+            applyReport(report, tracks);
+            writeBlocked = report.fatal() || !report.errors().isEmpty();
+            logReport(report);
+            if (!report.fatal()) {
+                // The map may have been replaced (or partially updated); listeners that cache
+                // state derived from it must forget it now, while no write can interleave.
+                notifyReloaded();
+            }
+            return report;
+        }
+    }
+
+    /**
+     * Registers the listener invoked inside the write lock after a non-fatal reload. Used by
+     * {@code EditService} to drop undo snapshots that predate the reload. The previous listener is
+     * replaced.
+     */
+    public void onReloaded(Runnable listener) {
+        this.reloadListener = listener;
+    }
+
+    private void notifyReloaded() {
+        Runnable listener = reloadListener;
+        if (listener == null) {
+            return;
+        }
+        try {
+            listener.run();
+        } catch (RuntimeException exception) {
+            logger.log(Level.WARNING, "Reload listener failed", exception);
+        }
     }
 
     public CompletableFuture<Void> flush() {
@@ -110,21 +159,82 @@ public final class TrackRepository {
         return tracks.keySet();
     }
 
-    public void upsert(CameraTrack track) {
-        Map<String, CameraTrack> next = new LinkedHashMap<>(tracks);
-        next.put(track.id(), track);
-        tracks = Map.copyOf(next);
+    /**
+     * Atomically applies {@code changer} to the track stored under {@code id} and stores the
+     * result. The whole read-compute-write cycle runs under one lock, so edits coming from
+     * different Folia region threads (commands, item tools, Dialog sessions) cannot clobber each
+     * other by read-copy-swap races.
+     *
+     * <p>{@code changer} receives the current track, or {@code null} when the id is unknown.
+     * Returning {@code null} means "abort and keep the stored value"; returning an equal track is
+     * a no-op. The method returns the value now stored under {@code id}, or {@code null} when the
+     * id is unknown and nothing was created. The returned track is immutable, like every value
+     * in this repository.</p>
+     */
+    public CameraTrack compute(String id, UnaryOperator<CameraTrack> changer) {
+        if (id == null || id.isBlank() || changer == null) {
+            return null;
+        }
+        String key = id.toLowerCase(Locale.ROOT);
+        synchronized (writeLock) {
+            CameraTrack current = tracks.get(key);
+            CameraTrack updated = changer.apply(current);
+            if (updated == null || updated.equals(current)) {
+                return current;
+            }
+            Map<String, CameraTrack> next = new LinkedHashMap<>(tracks);
+            next.put(key, updated);
+            tracks = Map.copyOf(next);
+            return updated;
+        }
     }
 
+    public void upsert(CameraTrack track) {
+        if (track == null) {
+            throw new IllegalArgumentException("Track is required");
+        }
+        compute(track.id(), ignored -> track);
+    }
+
+    /**
+     * Removes the track from the in-memory registry. Returns whether it existed. The
+     * {@linkplain #onTrackDeleted(Consumer) delete listener} runs outside the write lock.
+     */
     public boolean delete(String id) {
-        String normalized = id.toLowerCase(Locale.ROOT);
-        if (!tracks.containsKey(normalized)) {
+        if (id == null || id.isBlank()) {
             return false;
         }
-        Map<String, CameraTrack> next = new LinkedHashMap<>(tracks);
-        next.remove(normalized);
-        tracks = Map.copyOf(next);
+        String normalized = id.toLowerCase(Locale.ROOT);
+        synchronized (writeLock) {
+            if (!tracks.containsKey(normalized)) {
+                return false;
+            }
+            Map<String, CameraTrack> next = new LinkedHashMap<>(tracks);
+            next.remove(normalized);
+            tracks = Map.copyOf(next);
+        }
+        notifyTrackDeleted(normalized);
         return true;
+    }
+
+    /**
+     * Registers the listener told when a track is deleted. {@code EditService} uses it to drop
+     * undo entries of the removed track. The previous listener is replaced.
+     */
+    public void onTrackDeleted(Consumer<String> listener) {
+        this.trackDeletedListener = listener;
+    }
+
+    private void notifyTrackDeleted(String trackId) {
+        Consumer<String> listener = trackDeletedListener;
+        if (listener == null) {
+            return;
+        }
+        try {
+            listener.accept(trackId);
+        } catch (RuntimeException exception) {
+            logger.log(Level.WARNING, "Track-deleted listener failed for '" + trackId + "'", exception);
+        }
     }
 
     public CompletableFuture<Void> saveAsync() {
@@ -209,20 +319,22 @@ public final class TrackRepository {
     }
 
     private void applyReport(LoadReport report, Map<String, CameraTrack> previous) {
-        if (report.fatal()) {
-            if (previous.isEmpty()) {
-                tracks = Map.of();
+        synchronized (writeLock) {
+            if (report.fatal()) {
+                if (previous.isEmpty()) {
+                    tracks = Map.of();
+                }
+                return;
             }
-            return;
-        }
-        Map<String, CameraTrack> next = new LinkedHashMap<>(report.tracks());
-        for (String failedId : report.failedIds()) {
-            CameraTrack old = previous.get(failedId);
-            if (old != null) {
-                next.put(failedId, old);
+            Map<String, CameraTrack> next = new LinkedHashMap<>(report.tracks());
+            for (String failedId : report.failedIds()) {
+                CameraTrack old = previous.get(failedId);
+                if (old != null) {
+                    next.put(failedId, old);
+                }
             }
+            tracks = Map.copyOf(next);
         }
-        tracks = Map.copyOf(next);
     }
 
     private void logReport(LoadReport report) {

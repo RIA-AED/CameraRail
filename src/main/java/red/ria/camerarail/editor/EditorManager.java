@@ -1,76 +1,56 @@
 package red.ria.camerarail.editor;
 
-import net.kyori.adventure.text.Component;
-import net.kyori.adventure.text.event.ClickEvent;
-import net.kyori.adventure.text.event.HoverEvent;
-import net.kyori.adventure.text.format.NamedTextColor;
-import net.kyori.adventure.text.minimessage.MiniMessage;
+import org.bukkit.Location;
+import org.bukkit.entity.Player;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
+import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.plugin.Plugin;
 import red.ria.camerarail.api.CameraTrackEndEvent;
 import red.ria.camerarail.config.RailConfig;
 import red.ria.camerarail.config.TrackParser;
 import red.ria.camerarail.config.TrackRepository;
 import red.ria.camerarail.message.Messages;
-import red.ria.camerarail.model.CameraEffects;
-import red.ria.camerarail.model.CameraStep;
 import red.ria.camerarail.model.CameraTrack;
-import red.ria.camerarail.model.CutStep;
-import red.ria.camerarail.model.Easing;
-import red.ria.camerarail.model.EffectAction;
-import red.ria.camerarail.model.EffectSpec;
-import red.ria.camerarail.model.EffectStep;
 import red.ria.camerarail.model.ExitMode;
 import red.ria.camerarail.model.HoldStep;
-import red.ria.camerarail.model.MoveStep;
-import red.ria.camerarail.model.PathStep;
 import red.ria.camerarail.model.Pose;
 import red.ria.camerarail.model.Step;
 import red.ria.camerarail.model.SwayPreset;
 import red.ria.camerarail.model.SwaySettings;
-import red.ria.camerarail.model.TitleStep;
-import red.ria.camerarail.model.WaitStep;
 import red.ria.camerarail.runtime.CameraEngine;
-import org.bukkit.Bukkit;
-import org.bukkit.NamespacedKey;
-import org.bukkit.Registry;
-import org.bukkit.entity.Player;
-import org.bukkit.event.EventHandler;
-import org.bukkit.event.Listener;
-import org.bukkit.plugin.Plugin;
-import org.bukkit.potion.PotionEffectType;
 
 import java.util.ArrayList;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
-import java.util.regex.Pattern;
 
 /**
- * Command-driven in-game editor. Every mutation is saved immediately through the
- * repository's single-writer queue and can be undone.
+ * Dialog editor sessions.
+ *
+ * <p>This class owns the Dialog editor's draft, its undo history and its UI state. It is
+ * independent of the stateless command/tool editing surface ({@link EditService}); the only
+ * shared state is {@link EditorLocks}, which keeps a track from being edited by both systems at
+ * the same time. Every draft change is written through the repository immediately.</p>
  */
 public final class EditorManager implements Listener {
-    private static final Pattern ID_PATTERN = Pattern.compile("[a-z0-9][a-z0-9_-]{0,63}");
-    private static final MiniMessage STRICT = MiniMessage.builder().strict(true).build();
-
     private final Plugin plugin;
     private final TrackRepository repository;
     private final CameraEngine engine;
+    private final EditorLocks locks;
     private final Supplier<RailConfig> config;
     private final Supplier<Messages> messages;
     private final Map<UUID, EditorSession> editors = new ConcurrentHashMap<>();
 
-    public EditorManager(Plugin plugin, TrackRepository repository, CameraEngine engine,
+    public EditorManager(Plugin plugin, TrackRepository repository, CameraEngine engine, EditorLocks locks,
                          Supplier<RailConfig> config, Supplier<Messages> messages) {
         this.plugin = plugin;
         this.repository = repository;
         this.engine = engine;
+        this.locks = locks;
         this.config = config;
         this.messages = messages;
     }
@@ -84,12 +64,9 @@ public final class EditorManager implements Listener {
         return engine.fakeCameraAvailable();
     }
 
-    public boolean isEditing(Player player) {
-        return editors.containsKey(player.getUniqueId());
-    }
-
+    /** Whether a Dialog session currently holds this track. */
     public boolean isEditingTrack(String trackId) {
-        return editors.values().stream().anyMatch(session -> session.draft.id().equals(trackId));
+        return locks.locked(trackId);
     }
 
     public void open(Player player, String rawId) {
@@ -97,23 +74,39 @@ public final class EditorManager implements Listener {
             messages.get().send(player, "editor.already", "track", editors.get(player.getUniqueId()).draft.id());
             return;
         }
-        CameraTrack track = repository.get(rawId);
-        if (track == null) {
+        String id = normalizeId(rawId);
+        if (id == null) {
             messages.get().send(player, "track.not-found", "track", rawId);
             return;
         }
-        if (editors.values().stream().anyMatch(session -> session.draft.id().equals(track.id()))) {
-            messages.get().send(player, "manage.edit-busy", "track", track.id());
+        // tryLock is the only acquisition path: a check-then-lock pair would let two players
+        // (or two Folia region threads) both create a session for the same track.
+        if (!locks.tryLock(id, player.getUniqueId())) {
+            messages.get().send(player, "manage.edit-busy", "track", id);
             return;
         }
-        if (!track.worldName().equals(player.getWorld().getName())) {
-            messages.get().send(player, "editor.world-mismatch", "world", track.worldName());
-            return;
+        boolean keepLock = false;
+        try {
+            // Read the draft only after the lock is ours. A concurrent command edit either ran
+            // before this read (so the draft sees it) or its lock check sees our lock and refuses.
+            CameraTrack track = readAtomically(id);
+            if (track == null) {
+                messages.get().send(player, "track.not-found", "track", rawId);
+                return;
+            }
+            if (!track.worldName().equals(player.getWorld().getName())) {
+                messages.get().send(player, "editor.world-mismatch", "world", track.worldName());
+                return;
+            }
+            EditorSession session = new EditorSession(player.getUniqueId(), track);
+            editors.put(player.getUniqueId(), session);
+            messages.get().send(player, "editor.opened", "track", track.id(), "world", track.worldName());
+            keepLock = true;
+        } finally {
+            if (!keepLock) {
+                locks.unlock(id, player.getUniqueId());
+            }
         }
-        EditorSession session = new EditorSession(player.getUniqueId(), track);
-        editors.put(player.getUniqueId(), session);
-        messages.get().send(player, "editor.opened", "track", track.id(), "world", track.worldName());
-        status(player);
     }
 
     public void create(Player player, String rawId, String displayName) {
@@ -121,35 +114,54 @@ public final class EditorManager implements Listener {
             messages.get().send(player, "editor.already", "track", editors.get(player.getUniqueId()).draft.id());
             return;
         }
-        String id = rawId.toLowerCase(Locale.ROOT);
-        if (!ID_PATTERN.matcher(id).matches()) {
+        String id = normalizeId(rawId);
+        if (id == null || !TrackRules.isValidId(id)) {
             messages.get().send(player, "manage.invalid-id");
             return;
         }
-        if (repository.get(id) != null) {
-            messages.get().send(player, "manage.exists", "track", id);
-            return;
-        }
-        if (editors.values().stream().anyMatch(session -> session.draft.id().equals(id))) {
+        if (!locks.tryLock(id, player.getUniqueId())) {
             messages.get().send(player, "manage.edit-busy", "track", id);
             return;
         }
-        Pose start = eyePose(player);
-        if (start == null) {
-            return;
+        boolean keepLock = false;
+        try {
+            if (readAtomically(id) != null) {
+                messages.get().send(player, "manage.exists", "track", id);
+                return;
+            }
+            Pose start = eyePose(player);
+            if (start == null) {
+                return;
+            }
+            RailConfig cfg = config.get();
+            SwaySettings sway = SwaySettings.ofPreset(cfg.defaultSwayPreset(), cfg.defaultSwayPeriod(),
+                    TrackParser.defaultSeed(id));
+            CameraTrack track = new CameraTrack(id,
+                    displayName == null || displayName.isBlank() ? id : displayName,
+                    "", player.getWorld().getName(), start, ExitMode.ANIMATION_END, null, sway,
+                    cfg.followCamera(), List.of(), List.of(new HoldStep(20, SwayPreset.INHERIT)));
+            boolean[] created = {false};
+            repository.compute(id, current -> {
+                if (current != null) {
+                    return current;
+                }
+                created[0] = true;
+                return track;
+            });
+            if (!created[0]) {
+                messages.get().send(player, "manage.exists", "track", id);
+                return;
+            }
+            EditorSession session = new EditorSession(player.getUniqueId(), track);
+            editors.put(player.getUniqueId(), session);
+            persist(player, repository.saveAsync());
+            messages.get().send(player, "editor.created", "track", id);
+            keepLock = true;
+        } finally {
+            if (!keepLock) {
+                locks.unlock(id, player.getUniqueId());
+            }
         }
-        RailConfig cfg = config.get();
-        SwaySettings sway = SwaySettings.ofPreset(cfg.defaultSwayPreset(), cfg.defaultSwayPeriod(),
-                TrackParser.defaultSeed(id));
-        CameraTrack track = new CameraTrack(id, displayName == null || displayName.isBlank() ? id : displayName,
-                "", player.getWorld().getName(), start, ExitMode.ANIMATION_END, null, sway,
-                cfg.followCamera(), List.of(), List.of(new HoldStep(20, SwayPreset.INHERIT)));
-        repository.upsert(track);
-        EditorSession session = new EditorSession(player.getUniqueId(), track);
-        editors.put(player.getUniqueId(), session);
-        persist(player, repository.saveAsync());
-        messages.get().send(player, "editor.created", "track", id);
-        status(player);
     }
 
     public void close(Player player) {
@@ -158,6 +170,7 @@ public final class EditorManager implements Listener {
             messages.get().send(player, "editor.not-editing");
             return;
         }
+        locks.unlock(session.draft.id(), player.getUniqueId());
         if (session.previewing && engine.isPlaying(player)) {
             engine.stop(player);
         }
@@ -166,634 +179,36 @@ public final class EditorManager implements Listener {
 
     public void handleQuit(Player player) {
         EditorSession session = editors.remove(player.getUniqueId());
-        if (session != null && session.previewing) {
+        if (session == null) {
+            return;
+        }
+        locks.unlock(session.draft.id(), player.getUniqueId());
+        if (session.previewing) {
             engine.stop(player);
         }
     }
 
-    public void status(Player player) {
+    /** Deletes the track of the player's Dialog session. The caller has already confirmed. */
+    public void delete(Player player) {
         EditorSession session = editors.get(player.getUniqueId());
         if (session == null) {
             messages.get().send(player, "editor.not-editing");
-            return;
-        }
-        String selected = session.selected < 0 ? "未选择" : String.valueOf(session.selected + 1);
-        String state = session.previewing ? "预览中" : session.saveFailed ? "保存失败" : "自动保存";
-        player.sendMessage(messages.get().prefixed("editor.status",
-                "track", session.draft.id(),
-                "selected", selected,
-                "count", String.valueOf(session.draft.steps().size()),
-                "duration", String.valueOf(session.draft.timedDurationTicks()),
-                "state", state));
-        Step step = selectedStep(session);
-        if (step != null) {
-            player.sendMessage(messages.get().prefixed("editor.selected",
-                    "index", String.valueOf(session.selected + 1), "summary", step.describe()));
-        }
-    }
-
-    public void listSteps(Player player) {
-        EditorSession session = editors.get(player.getUniqueId());
-        if (session == null) {
-            messages.get().send(player, "editor.not-editing");
-            return;
-        }
-        player.sendMessage(messages.get().prefixed("track.info-header",
-                "id", session.draft.id(), "name", session.draft.displayName()));
-        if (session.draft.steps().isEmpty()) {
-            messages.get().send(player, "track.info-no-steps");
-            return;
-        }
-        for (int i = 0; i < session.draft.steps().size(); i++) {
-            int index = i;
-            Step step = session.draft.steps().get(i);
-            Component line = Component.text("· ", NamedTextColor.DARK_GRAY)
-                    .append(Component.text((i + 1) + " ", NamedTextColor.WHITE))
-                    .append(Component.text(step.type().configName(), NamedTextColor.WHITE))
-                    .append(Component.text(" · ", NamedTextColor.DARK_GRAY))
-                    .append(Component.text(step.describe(), NamedTextColor.GRAY))
-                    .clickEvent(ClickEvent.runCommand("/camerarail edit select " + (i + 1)))
-                    .hoverEvent(HoverEvent.showText(Component.text("点击选中步骤 " + (i + 1), NamedTextColor.GRAY)));
-            player.sendMessage(line);
-        }
-    }
-
-    public void setStart(Player player) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        Pose pose = eyePose(player);
-        if (pose == null) {
-            return;
-        }
-        session.remember();
-        session.draft = session.draft.withStart(pose);
-        persisted(player, session);
-        messages.get().send(player, "editor.start-set");
-    }
-
-    public void setExit(Player player) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        Pose pose = feetPose(player);
-        if (pose == null) {
-            return;
-        }
-        session.remember();
-        session.draft = session.draft.withExit(pose);
-        persisted(player, session);
-        messages.get().send(player, "editor.exit-set");
-    }
-
-    public void setExitMode(Player player, ExitMode mode) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        if (mode == ExitMode.CUSTOM) {
-            messages.get().send(player, "editor.exit-mode-custom");
-            return;
-        }
-        session.remember();
-        session.draft = session.draft.withExitMode(mode);
-        persisted(player, session);
-        messages.get().send(player, "editor.exit-mode-set", "mode", mode.configName());
-    }
-
-    public void addMove(Player player, int duration) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        Pose pose = eyePose(player);
-        if (pose == null) {
-            return;
-        }
-        int safeDuration = Math.max(1, Math.min(config.get().maxTrackTicks(), duration));
-        append(player, session, new MoveStep(pose, safeDuration, config.get().defaultEasing(),
-                SwayPreset.INHERIT), "editor.added");
-    }
-
-    public void addCut(Player player, int durationTicks) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        Pose pose = eyePose(player);
-        if (pose == null) {
-            return;
-        }
-        int safeDuration = Math.max(0, Math.min(config.get().maxTrackTicks(), durationTicks));
-        append(player, session, new CutStep(pose, safeDuration, SwayPreset.INHERIT), "editor.added");
-    }
-
-    public void addPath(Player player) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        Pose pose = eyePose(player);
-        if (pose == null) {
-            return;
-        }
-        append(player, session, new PathStep(List.of(pose), config.get().defaultMoveDuration(),
-                config.get().defaultEasing(), SwayPreset.INHERIT), "editor.added");
-        messages.get().send(player, "editor.path-created");
-    }
-
-    public void addPathPoint(Player player) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        PathStep path = selectedPath(session);
-        if (path == null) {
-            messages.get().send(player, "editor.need-path");
-            return;
-        }
-        Pose pose = eyePose(player);
-        if (pose == null) {
-            return;
-        }
-        PathPoints.Result result = PathPoints.append(session.draft, session.selected, path.points(), pose);
-        if (result.outcome() == PathPoints.Outcome.DUPLICATE) {
-            messages.get().send(player, "editor.path-point-duplicate");
-            return;
-        }
-        if (PathPoints.exceedsLimit(result, config.get().maxPathPoints())) {
-            messages.get().send(player, "editor.invalid-value", "value", "路径点数量已达上限");
-            return;
-        }
-        replaceSelected(player, session, new PathStep(result.points(), path.durationTicks(), path.easing(),
-                path.sway()), false);
-        messages.get().send(player, result.outcome() == PathPoints.Outcome.REPLACED_SEED
-                        ? "editor.path-point-seeded" : "editor.path-point-added",
-                "count", String.valueOf(result.points().size()));
-    }
-
-    public void removePathPoint(Player player) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        PathStep path = selectedPath(session);
-        if (path == null) {
-            messages.get().send(player, "editor.need-path");
-            return;
-        }
-        if (path.points().size() <= 1) {
-            messages.get().send(player, "editor.path-point-min");
-            return;
-        }
-        List<Pose> points = new ArrayList<>(path.points());
-        points.removeLast();
-        replaceSelected(player, session, new PathStep(points, path.durationTicks(), path.easing(), path.sway()),
-                false);
-        messages.get().send(player, "editor.path-point-removed", "count", String.valueOf(points.size()));
-    }
-
-    public void addHold(Player player, int ticks) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        int safeTicks = Math.max(1, Math.min(config.get().maxTrackTicks(), ticks));
-        append(player, session, new HoldStep(safeTicks, SwayPreset.INHERIT), "editor.added");
-    }
-
-    public void addWait(Player player, String signal, int timeoutTicks) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        if (signal == null || signal.isBlank() || signal.length() > 80) {
-            messages.get().send(player, "editor.wait-usage");
-            return;
-        }
-        for (Step step : session.draft.steps()) {
-            if (step instanceof WaitStep wait && wait.signal().equals(signal)) {
-                messages.get().send(player, "editor.duplicate-signal", "signal", signal);
-                return;
-            }
-        }
-        int safeTimeout = Math.max(0, Math.min(config.get().maxTrackTicks(), timeoutTicks));
-        append(player, session, new WaitStep(signal, safeTimeout, SwayPreset.INHERIT), "editor.added");
-    }
-
-    public void addEffect(Player player, String actionRaw, String effectRaw, int amplifier, int duration) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        EffectAction action;
-        try {
-            action = EffectAction.parse(actionRaw);
-        } catch (IllegalArgumentException exception) {
-            messages.get().send(player, "editor.invalid-value", "value", actionRaw);
-            return;
-        }
-        PotionEffectType type = resolveEffect(effectRaw);
-        if (type == null) {
-            messages.get().send(player, "editor.invalid-effect", "effect", effectRaw);
-            return;
-        }
-        int safeAmplifier = Math.max(0, Math.min(255, amplifier));
-        int safeDuration = Math.max(0, Math.min(config.get().maxTrackTicks(), duration));
-        EffectSpec spec = new EffectSpec(type, type.getKey().toString(), action, safeAmplifier, safeDuration);
-        int before = session.draft.steps().size();
-        append(player, session, new EffectStep(spec), "editor.effect-added");
-        if (session.draft.steps().size() > before
-                && action == EffectAction.ADD
-                && CameraEffects.isCameraDependent(spec)
-                && !fakeCameraAvailable()) {
-            messages.get().send(player, "camera.fake-camera-unavailable");
-        }
-    }
-
-    public void addTitle(Player player, int fadeIn, int stay, int fadeOut, String text) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        String[] split = text.split("\\|", 2);
-        String title = split[0].trim();
-        String subtitle = split.length > 1 ? split[1].trim() : "";
-        if (title.isBlank() && subtitle.isBlank()) {
-            messages.get().send(player, "editor.invalid-title");
-            return;
-        }
-        try {
-            if (!title.isBlank()) {
-                STRICT.deserialize(title);
-            }
-            if (!subtitle.isBlank()) {
-                STRICT.deserialize(subtitle);
-            }
-        } catch (RuntimeException exception) {
-            messages.get().send(player, "editor.invalid-title");
-            return;
-        }
-        append(player, session, new TitleStep(title, subtitle, Math.max(0, fadeIn), Math.max(0, stay),
-                Math.max(0, fadeOut)), "editor.added");
-    }
-
-    /**
-     * Updates the selected step from the player's current eye pose.
-     */
-    public void updateHere(Player player) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        if (session.selected < 0) {
-            setStart(player);
-            return;
-        }
-        Step step = selectedStep(session);
-        if (step == null) {
-            messages.get().send(player, "editor.no-step");
-            return;
-        }
-        Pose pose = eyePose(player);
-        if (pose == null) {
-            return;
-        }
-        if (step instanceof PathStep path) {
-            // "here" appends a waypoint to a path, so it needs the same duplicate guard as
-            // /camerarail edit point; otherwise it can still write a point on top of the step
-            // start right after the path was created in place.
-            PathPoints.Result result = PathPoints.append(session.draft, session.selected, path.points(), pose);
-            if (result.outcome() == PathPoints.Outcome.DUPLICATE) {
-                messages.get().send(player, "editor.path-point-duplicate");
-                return;
-            }
-            if (PathPoints.exceedsLimit(result, config.get().maxPathPoints())) {
-                messages.get().send(player, "editor.invalid-value", "value", "路径点数量已达上限");
-                return;
-            }
-            if (!replaceSelected(player, session, new PathStep(result.points(), path.durationTicks(),
-                    path.easing(), path.sway()), false)) {
-                return;
-            }
-            messages.get().send(player, result.outcome() == PathPoints.Outcome.REPLACED_SEED
-                            ? "editor.path-point-seeded" : "editor.path-point-added",
-                    "count", String.valueOf(result.points().size()));
-            return;
-        }
-        Step replacement = switch (step) {
-            case MoveStep move -> new MoveStep(pose, move.durationTicks(), move.easing(), move.sway());
-            case CutStep cut -> new CutStep(pose, cut.durationTicks(), cut.sway());
-            default -> null;
-        };
-        if (replacement == null) {
-            messages.get().send(player, "editor.not-camera-step");
-            return;
-        }
-        replaceSelected(player, session, replacement);
-    }
-
-    public void setDuration(Player player, int ticks) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        Step step = selectedStep(session);
-        if (step == null) {
-            messages.get().send(player, "editor.no-step");
-            return;
-        }
-        int safe = Math.max(1, Math.min(config.get().maxTrackTicks(), ticks));
-        Step replacement = switch (step) {
-            case MoveStep move -> new MoveStep(move.to(), safe, move.easing(), move.sway());
-            case PathStep path -> new PathStep(path.points(), safe, path.easing(), path.sway());
-            case HoldStep hold -> new HoldStep(safe, hold.sway());
-            // 0 is meaningful for a cut: it drops the post-jump hold entirely.
-            case CutStep cut -> new CutStep(cut.to(),
-                    Math.max(0, Math.min(config.get().maxTrackTicks(), ticks)), cut.sway());
-            default -> null;
-        };
-        if (replacement == null) {
-            messages.get().send(player, "editor.need-duration");
-            return;
-        }
-        if (!replaceSelected(player, session, replacement, false)) {
-            return;
-        }
-        int applied = replacement instanceof CameraStep cameraStep ? cameraStep.timedDurationTicks() : safe;
-        messages.get().send(player, "editor.duration-set", "ticks", String.valueOf(applied));
-    }
-
-    public void setEasing(Player player, String raw) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        Easing easing;
-        try {
-            easing = Easing.parse(raw);
-        } catch (IllegalArgumentException exception) {
-            messages.get().send(player, "editor.invalid-value", "value", raw);
-            return;
-        }
-        Step step = selectedStep(session);
-        if (step == null) {
-            messages.get().send(player, "editor.no-step");
-            return;
-        }
-        Step replacement = switch (step) {
-            case MoveStep move -> new MoveStep(move.to(), move.durationTicks(), easing, move.sway());
-            case PathStep path -> new PathStep(path.points(), path.durationTicks(), easing, path.sway());
-            default -> null;
-        };
-        if (replacement == null) {
-            messages.get().send(player, "editor.not-camera-step");
-            return;
-        }
-        replaceSelected(player, session, replacement, false);
-        messages.get().send(player, "editor.easing-set", "easing", raw.toLowerCase(Locale.ROOT));
-    }
-
-    public void setStepSway(Player player, String raw) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        SwayPreset preset;
-        try {
-            preset = SwayPreset.parse(raw);
-        } catch (IllegalArgumentException exception) {
-            messages.get().send(player, "editor.invalid-value", "value", raw);
-            return;
-        }
-        Step step = selectedStep(session);
-        if (step == null) {
-            messages.get().send(player, "editor.no-step");
-            return;
-        }
-        Step replacement = withSway(step, preset);
-        if (replacement == null) {
-            messages.get().send(player, "editor.not-camera-step");
-            return;
-        }
-        replaceSelected(player, session, replacement, false);
-        messages.get().send(player, "editor.step-sway-set", "sway", preset.name().toLowerCase(Locale.ROOT));
-    }
-
-    public void setTrackSway(Player player, String raw) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        SwayPreset preset;
-        try {
-            preset = SwayPreset.parse(raw);
-        } catch (IllegalArgumentException exception) {
-            messages.get().send(player, "editor.invalid-value", "value", raw);
-            return;
-        }
-        if (preset == SwayPreset.INHERIT) {
-            messages.get().send(player, "editor.invalid-value", "value", raw);
-            return;
-        }
-        session.remember();
-        SwaySettings settings = SwaySettings.ofPreset(preset, session.draft.sway().period(),
-                session.draft.sway().seed());
-        session.draft = session.draft.withSway(settings);
-        persisted(player, session);
-        messages.get().send(player, "editor.sway-set", "sway", preset.name().toLowerCase(Locale.ROOT));
-    }
-
-    public void setFollow(Player player, boolean follow) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        session.remember();
-        session.draft = session.draft.withFollow(follow);
-        persisted(player, session);
-        messages.get().send(player, "editor.follow-set", "value", follow ? "true" : "false");
-    }
-
-    public void setDisplayName(Player player, String name) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        if (name == null || name.isBlank()) {
-            messages.get().send(player, "editor.display-usage");
-            return;
-        }
-        session.remember();
-        session.draft = session.draft.withDisplayName(name.trim());
-        persisted(player, session);
-        messages.get().send(player, "editor.display-set", "name", name.trim());
-    }
-
-    public void select(Player player, int oneBased) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        int max = session.draft.steps().size();
-        if (oneBased < 1 || oneBased > max) {
-            messages.get().send(player, "editor.selected-index-invalid", "max", String.valueOf(max));
-            return;
-        }
-        session.selected = oneBased - 1;
-        Step step = selectedStep(session);
-        messages.get().send(player, "editor.selected", "index", String.valueOf(oneBased),
-                "summary", step == null ? "" : step.describe());
-    }
-
-    public void moveSelected(Player player, boolean up) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        int index = session.selected;
-        if (index < 0) {
-            messages.get().send(player, "editor.no-step");
-            return;
-        }
-        int target = up ? index - 1 : index + 1;
-        if (target < 0 || target >= session.draft.steps().size()) {
-            return;
-        }
-        session.remember();
-        List<Step> steps = new ArrayList<>(session.draft.steps());
-        Step moved = steps.remove(index);
-        steps.add(target, moved);
-        session.draft = session.draft.withSteps(steps);
-        session.selected = target;
-        persisted(player, session);
-        messages.get().send(player, "editor.moved", "index", String.valueOf(target + 1));
-    }
-
-    public void removeSelected(Player player) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        int index = session.selected;
-        if (index < 0) {
-            messages.get().send(player, "editor.no-step");
-            return;
-        }
-        session.remember();
-        List<Step> steps = new ArrayList<>(session.draft.steps());
-        steps.remove(index);
-        session.draft = session.draft.withSteps(steps);
-        session.selected = Math.min(index, steps.size() - 1);
-        persisted(player, session);
-        messages.get().send(player, "editor.removed", "index", String.valueOf(index + 1));
-    }
-
-    public void undo(Player player) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        if (!session.restore()) {
-            messages.get().send(player, "editor.nothing-to-undo");
-            return;
-        }
-        persisted(player, session);
-        messages.get().send(player, "editor.undone");
-    }
-
-    public void save(Player player) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        repository.upsert(session.draft);
-        persist(player, repository.saveAsync());
-        messages.get().send(player, "editor.saved", "track", session.draft.id());
-    }
-
-    public void preview(Player player) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        if (session.previewing) {
-            // Preview acts as a toggle; the command hint says "再次执行停止".
-            stopPreview(player);
-            return;
-        }
-        if (session.draft.steps().isEmpty()) {
-            messages.get().send(player, "editor.preview-no-steps");
-            return;
-        }
-        if (engine.isPlaying(player)) {
-            messages.get().send(player, session.previewing ? "editor.preview-active" : "editor.preview-other");
-            return;
-        }
-        repository.upsert(session.draft);
-        persist(player, repository.saveAsync());
-        session.uiPreview = false;
-        if (engine.playPreview(player, session.draft.id())) {
-            session.previewing = true;
-            messages.get().send(player, "editor.preview-started", "track", session.draft.id());
-            // A canceled start event does not produce an end event. Detect that case so the
-            // editor does not stay locked in "previewing" forever.
-            player.getScheduler().execute(plugin, () -> {
-                if (editors.get(player.getUniqueId()) == session
-                        && session.previewing && !engine.isPlaying(player)) {
-                    session.previewing = false;
-                    session.uiPreview = false;
-                    messages.get().send(player, "editor.preview-failed");
-                }
-            }, () -> {
-            }, 5L);
-        } else {
-            messages.get().send(player, "editor.preview-failed");
-        }
-    }
-
-    public void stopPreview(Player player) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        if (session.previewing) {
-            session.uiPreview = false;
-            engine.stop(player);
-            session.previewing = false;
-            messages.get().send(player, "editor.preview-stopped");
-        }
-    }
-
-    public void delete(Player player, boolean confirm) {
-        EditorSession session = requireEditor(player);
-        if (session == null) {
-            return;
-        }
-        if (!confirm) {
-            messages.get().send(player, "editor.delete-confirm",
-                    "track", session.draft.id(),
-                    "command", "/camerarail edit delete confirm");
-            return;
-        }
-        if (editors.values().stream().anyMatch(other -> other != session
-                && other.draft.id().equals(session.draft.id()))) {
-            messages.get().send(player, "manage.edit-busy", "track", session.draft.id());
             return;
         }
         if (session.previewing && engine.isPlaying(player)) {
             engine.stop(player);
         }
-        repository.delete(session.draft.id());
-        persist(player, repository.saveAsync());
+        String trackId = session.draft.id();
+        if (repository.delete(trackId)) {
+            persist(player, repository.saveAsync());
+        }
         editors.remove(player.getUniqueId());
-        messages.get().send(player, "editor.deleted", "track", session.draft.id());
+        locks.unlock(trackId, player.getUniqueId());
+        messages.get().send(player, "editor.deleted", "track", trackId);
     }
 
     @EventHandler
-    public void onQuit(org.bukkit.event.player.PlayerQuitEvent event) {
+    public void onQuit(PlayerQuitEvent event) {
         handleQuit(event.getPlayer());
     }
 
@@ -811,159 +226,6 @@ public final class EditorManager implements Listener {
                 messages.get().send(event.getPlayer(), "editor.preview-ended");
             }
         }
-    }
-
-    private void append(Player player, EditorSession session, Step step, String messageKey) {
-        if (session.draft.steps().size() >= config.get().maxSteps()) {
-            messages.get().send(player, "editor.limit", "limit", "步骤数上限 " + config.get().maxSteps());
-            return;
-        }
-        if (session.draft.timedDurationTicks() + timedTicks(step) > config.get().maxTrackTicks()) {
-            messages.get().send(player, "editor.limit", "limit", "总时长上限 " + config.get().maxTrackTicks() + "t");
-            return;
-        }
-        session.remember();
-        List<Step> steps = new ArrayList<>(session.draft.steps());
-        steps.add(step);
-        session.draft = session.draft.withSteps(steps);
-        session.selected = steps.size() - 1;
-        persisted(player, session);
-        messages.get().send(player, messageKey,
-                "index", String.valueOf(steps.size()), "summary", step.describe());
-    }
-
-    private void replaceSelected(Player player, EditorSession session, Step step) {
-        replaceSelected(player, session, step, true);
-    }
-
-    /**
-     * @return true when the step was written; false when validation rejected it
-     */
-    private boolean replaceSelected(Player player, EditorSession session, Step step, boolean announce) {
-        if (session.selected < 0 || session.selected >= session.draft.steps().size()) {
-            messages.get().send(player, "editor.no-step");
-            return false;
-        }
-        Step previous = session.draft.steps().get(session.selected);
-        long totalAfter = session.draft.timedDurationTicks() - timedTicks(previous) + timedTicks(step);
-        if (totalAfter > config.get().maxTrackTicks()) {
-            messages.get().send(player, "editor.limit", "limit", "总时长上限 " + config.get().maxTrackTicks() + "t");
-            return false;
-        }
-        session.remember();
-        List<Step> steps = new ArrayList<>(session.draft.steps());
-        steps.set(session.selected, step);
-        session.draft = session.draft.withSteps(steps);
-        persisted(player, session);
-        if (announce) {
-            messages.get().send(player, "editor.updated",
-                    "index", String.valueOf(session.selected + 1), "summary", step.describe());
-        }
-        return true;
-    }
-
-    private void persisted(Player player, EditorSession session) {
-        repository.upsert(session.draft);
-        persist(player, repository.saveAsync());
-    }
-
-    private void persist(Player player, java.util.concurrent.CompletableFuture<Void> future) {
-        EditorSession session = editors.get(player.getUniqueId());
-        future.whenComplete((ignored, error) -> {
-            if (error == null) {
-                if (session != null) {
-                    session.saveFailed = false;
-                }
-                return;
-            }
-            if (session != null) {
-                session.saveFailed = true;
-            }
-            plugin.getLogger().log(java.util.logging.Level.SEVERE, "Could not save tracks.yml", error);
-            if (player.isOnline()) {
-                player.getScheduler().execute(plugin,
-                        () -> messages.get().send(player, "editor.save-failed"), () -> {
-                        }, 0L);
-            }
-        });
-    }
-
-    private EditorSession requireEditor(Player player) {
-        EditorSession session = editors.get(player.getUniqueId());
-        if (session == null) {
-            messages.get().send(player, "editor.not-editing");
-        }
-        return session;
-    }
-
-    private Step selectedStep(EditorSession session) {
-        if (session.selected < 0 || session.selected >= session.draft.steps().size()) {
-            return null;
-        }
-        return session.draft.steps().get(session.selected);
-    }
-
-    private PathStep selectedPath(EditorSession session) {
-        Step step = selectedStep(session);
-        return step instanceof PathStep path ? path : null;
-    }
-
-    private Pose eyePose(Player player) {
-        EditorSession session = editors.get(player.getUniqueId());
-        if (session != null && session.previewing) {
-            messages.get().send(player, "editor.preview-active");
-            return null;
-        }
-        if (session != null && !player.getWorld().getName().equals(session.worldName)) {
-            messages.get().send(player, "editor.world-mismatch", "world", session.worldName);
-            return null;
-        }
-        var location = player.getEyeLocation();
-        return new Pose(location.getX(), location.getY(), location.getZ(), player.getYaw(), player.getPitch());
-    }
-
-    private Pose feetPose(Player player) {
-        EditorSession session = editors.get(player.getUniqueId());
-        if (session != null && session.previewing) {
-            messages.get().send(player, "editor.preview-active");
-            return null;
-        }
-        if (session != null && !player.getWorld().getName().equals(session.worldName)) {
-            messages.get().send(player, "editor.world-mismatch", "world", session.worldName);
-            return null;
-        }
-        var location = player.getLocation();
-        return new Pose(location.getX(), location.getY(), location.getZ(), player.getYaw(), player.getPitch());
-    }
-
-    private static int timedTicks(Step step) {
-        return step instanceof CameraStep cameraStep ? cameraStep.timedDurationTicks() : 0;
-    }
-
-    private static Step withSway(Step step, SwayPreset sway) {
-        return switch (step) {
-            case MoveStep move -> new MoveStep(move.to(), move.durationTicks(), move.easing(), sway);
-            case PathStep path -> new PathStep(path.points(), path.durationTicks(), path.easing(), sway);
-            case HoldStep hold -> new HoldStep(hold.durationTicks(), sway);
-            case WaitStep wait -> new WaitStep(wait.signal(), wait.timeoutTicks(), sway);
-            case CutStep cut -> new CutStep(cut.to(), cut.durationTicks(), sway);
-            default -> null;
-        };
-    }
-
-    public static PotionEffectType resolveEffect(String raw) {
-        String normalized = raw.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
-        normalized = switch (normalized) {
-            case "slow" -> "slowness";
-            case "blind" -> "blindness";
-            case "nv" -> "night_vision";
-            default -> normalized;
-        };
-        if (!normalized.contains(":")) {
-            normalized = "minecraft:" + normalized;
-        }
-        NamespacedKey key = NamespacedKey.fromString(normalized);
-        return key == null ? null : Registry.EFFECT.get(key);
     }
 
     // ------------------------------------------------------------------ dialog editor API
@@ -1058,7 +320,9 @@ public final class EditorManager implements Listener {
         int index = Math.max(0, Math.min(startIndex, session.draft.steps().size() - 1));
         int last = session.draft.steps().size() - 1;
         int end = endIndex < 0 ? last : Math.max(index, Math.min(endIndex, last));
-        repository.upsert(session.draft);
+        if (!storeDraft(player, session)) {
+            return false;
+        }
         persist(player, repository.saveAsync());
         session.previewing = true;
         session.uiPreview = true;
@@ -1102,67 +366,74 @@ public final class EditorManager implements Listener {
     }
 
     private String validateDraft(EditorSession session, CameraTrack updated) {
-        if (updated == null) {
-            return "轨道数据无效.";
-        }
-        if (!updated.id().equals(session.draft.id())) {
-            return "轨道 id 不能在这里修改.";
-        }
-        if (!updated.worldName().equals(session.worldName)) {
-            return "轨道世界不能在这里修改.";
-        }
-        if (updated.steps().size() > config.get().maxSteps()) {
-            return "步骤数上限 " + config.get().maxSteps() + ".";
-        }
-        if (updated.timedDurationTicks() > config.get().maxTrackTicks()) {
-            return "总时长上限 " + config.get().maxTrackTicks() + "t.";
-        }
-        Set<String> signals = new HashSet<>();
-        for (Step step : updated.steps()) {
-            if (step instanceof WaitStep wait && !signals.add(wait.signal())) {
-                return "等待信号 " + wait.signal() + " 重复.";
-            }
-            if (step instanceof PathStep path && path.points().size() > config.get().maxPathPoints()) {
-                return "路径点上限 " + config.get().maxPathPoints() + ".";
-            }
-            if (step instanceof TitleStep title) {
-                String error = validateMiniMessage(title.title(), "标题");
-                if (error != null) {
-                    return error;
-                }
-                error = validateMiniMessage(title.subtitle(), "副标题");
-                if (error != null) {
-                    return error;
-                }
-            }
-        }
-        return null;
+        return TrackRules.validate(session.draft, updated, config.get());
     }
 
-    private static String validateMiniMessage(String text, String label) {
-        if (text == null || text.isBlank()) {
+    private Pose eyePose(Player player) {
+        if (engine.isPlaying(player)) {
+            messages.get().send(player, "editor.preview-active");
             return null;
         }
-        try {
-            STRICT.deserialize(text);
-            return null;
-        } catch (RuntimeException exception) {
-            return label + "不是合法的 MiniMessage.";
+        Location eye = player.getEyeLocation();
+        return new Pose(eye.getX(), eye.getY(), eye.getZ(), player.getYaw(), player.getPitch());
+    }
+
+    private static String normalizeId(String rawId) {
+        return rawId == null ? null : rawId.toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Reads the current track under the repository write lock. A command edit is either fully
+     * before this read or sees the session lock and refuses, so the draft cannot start from a
+     * value the command surface is about to replace.
+     */
+    private CameraTrack readAtomically(String id) {
+        return repository.compute(id, current -> current);
+    }
+
+    /**
+     * Writes the draft into the repository through the atomic compute path. Returns {@code false}
+     * when the track no longer exists; the caller must then skip the save instead of writing a
+     * stale draft that would resurrect a deleted track.
+     */
+    private boolean storeDraft(Player player, EditorSession session) {
+        CameraTrack stored = repository.compute(session.draft.id(),
+                current -> current == null ? null : session.draft);
+        if (stored != null) {
+            return true;
         }
+        if (!session.saveFailed) {
+            session.saveFailed = true;
+            messages.get().send(player, "track.not-found", "track", session.draft.id());
+        }
+        return false;
     }
 
-    public Optional<String> editingTrack(Player player) {
-        EditorSession session = editors.get(player.getUniqueId());
-        return session == null ? Optional.empty() : Optional.of(session.draft.id());
+    private void persisted(Player player, EditorSession session) {
+        if (!storeDraft(player, session)) {
+            return;
+        }
+        persist(player, repository.saveAsync());
     }
 
-    public int stepCount(Player player) {
+    private void persist(Player player, java.util.concurrent.CompletableFuture<Void> future) {
         EditorSession session = editors.get(player.getUniqueId());
-        return session == null ? 0 : session.draft.steps().size();
-    }
-
-    public boolean isPreviewing(Player player) {
-        EditorSession session = editors.get(player.getUniqueId());
-        return session != null && session.previewing;
+        future.whenComplete((ignored, error) -> {
+            if (error == null) {
+                if (session != null) {
+                    session.saveFailed = false;
+                }
+                return;
+            }
+            if (session != null) {
+                session.saveFailed = true;
+            }
+            plugin.getLogger().log(java.util.logging.Level.SEVERE, "Could not save tracks.yml", error);
+            if (player.isOnline()) {
+                player.getScheduler().execute(plugin,
+                        () -> messages.get().send(player, "editor.save-failed"), () -> {
+                        }, 0L);
+            }
+        });
     }
 }

@@ -1,6 +1,6 @@
 package red.ria.camerarail.config;
 
-import net.kyori.adventure.text.minimessage.MiniMessage;
+import red.ria.camerarail.message.MiniMessages;
 import red.ria.camerarail.model.CameraTrack;
 import red.ria.camerarail.model.CutStep;
 import red.ria.camerarail.model.Easing;
@@ -16,6 +16,7 @@ import red.ria.camerarail.model.Step;
 import red.ria.camerarail.model.SwayPreset;
 import red.ria.camerarail.model.SwaySettings;
 import red.ria.camerarail.model.TitleStep;
+import red.ria.camerarail.model.TrackId;
 import red.ria.camerarail.model.WaitStep;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Registry;
@@ -30,18 +31,15 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
-import java.util.regex.Pattern;
 
 /**
  * Strict YAML parser. It reports the exact path of a mistake instead of silently using
  * defaults, which keeps hand-written tracks predictable.
  */
 public final class TrackParser {
-    private static final Pattern ID_PATTERN = Pattern.compile("[a-z0-9][a-z0-9_-]{0,63}");
     private static final Set<String> POSE_KEYS = Set.of("x", "y", "z", "yaw", "pitch");
     private static final Set<String> STEP_COMMON = Set.of("type", "sway");
     private static final Map<String, String> EFFECT_ALIASES = createEffectAliases();
-    private static final MiniMessage MINI_MESSAGE = MiniMessage.builder().strict(true).build();
 
     private final RailConfig config;
 
@@ -55,7 +53,7 @@ public final class TrackParser {
      * @throws IllegalArgumentException on any schema error, with a path in the message
      */
     public CameraTrack parseTrack(String rawId, ConfigurationSection section) {
-        if (rawId == null || !ID_PATTERN.matcher(rawId).matches()) {
+        if (!TrackId.isValid(rawId)) {
             throw new IllegalArgumentException("Invalid track id '" + rawId
                     + "' (use lowercase letters, digits, '-' and '_', max 64 chars)");
         }
@@ -364,7 +362,7 @@ public final class TrackParser {
             return;
         }
         try {
-            MINI_MESSAGE.deserialize(text);
+            MiniMessages.strict().deserialize(text);
         } catch (RuntimeException exception) {
             throw new IllegalArgumentException(path + ": invalid MiniMessage: " + exception.getMessage());
         }

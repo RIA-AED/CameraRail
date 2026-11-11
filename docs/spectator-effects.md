@@ -133,7 +133,7 @@ PacketEvents 是软依赖。未安装、API 未初始化或假玩家生成失败
 - 播放含镜头相关效果的轨道：聊天栏提示一次，控制台按轨道 id 只 WARN 一次；
 - `/camerarail info <轨道>`：显示“镜头模式: 假玩家 (PacketEvents)”或“镜头模式: 盔甲架回退”；
 - 编辑器轨道概览、效果选择器和效果表单：显示“盔甲架回退模式”及受影响的 FOV/失明雾；
-- `/camerarail edit effect add ...`：追加成功后，聊天栏追加同样的提示。
+- `/camerarail edit <轨道> add effect ...`：追加成功后，聊天栏追加同样的提示。
 
 假玩家镜头创建失败（PacketEvents 存在但发包失败）时，控制台保留异常堆栈，玩家聊天栏收到 `camera.fake-camera-failed` 并回退到盔甲架。
 
@@ -158,11 +158,11 @@ PacketEvents 是软依赖。未安装、API 未初始化或假玩家生成失败
 用编辑器给一条轨道加效果步骤：
 
 ```text
-/camerarail edit effect add blindness
-/camerarail edit effect add slowness 1
-/camerarail edit effect add darkness
-/camerarail edit effect add night_vision
-/camerarail edit effect add nausea
+/camerarail edit <轨道> add effect blindness
+/camerarail edit <轨道> add effect slowness 1
+/camerarail edit <轨道> add effect darkness
+/camerarail edit <轨道> add effect night_vision
+/camerarail edit <轨道> add effect nausea
 ```
 
 播放后预期：

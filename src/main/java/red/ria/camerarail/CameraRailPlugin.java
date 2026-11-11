@@ -5,7 +5,10 @@ import red.ria.camerarail.command.CameraCommand;
 import red.ria.camerarail.config.LoadReport;
 import red.ria.camerarail.config.RailConfig;
 import red.ria.camerarail.config.TrackRepository;
+import red.ria.camerarail.editor.EditService;
+import red.ria.camerarail.editor.EditorLocks;
 import red.ria.camerarail.editor.EditorManager;
+import red.ria.camerarail.editor.EditorTools;
 import red.ria.camerarail.editor.EditorUI;
 import red.ria.camerarail.listener.CameraListener;
 import red.ria.camerarail.message.Messages;
@@ -31,6 +34,8 @@ public final class CameraRailPlugin extends JavaPlugin {
     private CameraOverlay cameraOverlay;
     private CameraEngine engine;
     private EditorManager editors;
+    private EditService editService;
+    private EditorTools editorTools;
     private EditorUI editorUi;
     private CameraCommand command;
 
@@ -56,15 +61,22 @@ public final class CameraRailPlugin extends JavaPlugin {
 
         engine = new CameraEngine(this, tracks, recovery, () -> config, () -> messages,
                 this::reloadEverything, cameraOverlay);
-        editors = new EditorManager(this, tracks, engine, () -> config, () -> messages);
+        EditorLocks editorLocks = new EditorLocks();
+        editors = new EditorManager(this, tracks, engine, editorLocks, () -> config, () -> messages);
+        editService = new EditService(this, tracks, engine, editorLocks, () -> config, () -> messages);
         editorUi = new EditorUI(this, editors, tracks, () -> config, () -> messages);
-        command = new CameraCommand(engine, tracks, editors, editorUi, () -> config, () -> messages,
-                this::reloadEverything);
+        editorTools = new EditorTools(this, tracks, editService, () -> config, () -> messages,
+                player -> editorUi.open(player));
+        editorUi.setToolMenu(player -> editorTools.openMenu(player));
+        command = new CameraCommand(engine, tracks, editors, editorUi, editService, editorTools,
+                () -> config, () -> messages, this::reloadEverything);
 
         getServer().getServicesManager().register(CameraService.class, engine, this, ServicePriority.Normal);
         getServer().getPluginManager().registerEvents(new CameraListener(engine), this);
         getServer().getPluginManager().registerEvents(editors, this);
+        getServer().getPluginManager().registerEvents(editService, this);
         getServer().getPluginManager().registerEvents(editorUi, this);
+        getServer().getPluginManager().registerEvents(editorTools, this);
 
         PluginCommand pluginCommand = getCommand("camerarail");
         if (pluginCommand == null) {
@@ -99,10 +111,20 @@ public final class CameraRailPlugin extends JavaPlugin {
     }
 
     /**
-     * Reloads config, messages and tracks. Returns the number of loaded tracks, or -1 when
-     * tracks.yml could not be loaded at all.
+     * Reloads config, messages and tracks. Returns the number of loaded tracks, or -1 when the
+     * reload was refused, tracks.yml could not be loaded at all, or some tracks failed to parse
+     * (the rest are still reloaded and the failing ones keep their previous version).
+     *
+     * <p>A reload replaces the whole in-memory track map, so it is refused while any Dialog
+     * session is open: the session's draft would silently overwrite the freshly loaded file and
+     * could resurrect a track removed from it. The guard lives here (not only in the command) so
+     * {@link red.ria.camerarail.api.CameraService#reload()} is safe too.</p>
      */
     public int reloadEverything() {
+        if (editors != null && editors.hasEditors()) {
+            getLogger().warning("CameraRail reload refused: a Dialog editor session is still open.");
+            return -1;
+        }
         try {
             reloadConfig();
             RailConfig newConfig = RailConfig.load(getConfig(), getLogger());

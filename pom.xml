@@ -6,7 +6,7 @@
 
     <groupId>red.ria</groupId>
     <artifactId>CameraRail</artifactId>
-    <version>1.1.0</version>
+    <version>1.1.1</version>
     <name>CameraRail</name>
     <description>Lightweight spectator camera tracks and cutscenes for Paper/Folia.</description>
 

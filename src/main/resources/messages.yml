@@ -21,16 +21,14 @@ track:
   advance: "<gray>信号 <white>{signal}</white> 已送达."
   advance-queued: "<gray>信号 <white>{signal}</white> 已记录，将在对应的等待步骤消费."
   advance-none: "<gray>当前没有等待中的信号."
-  advance-no-match: "<gray>当前等待的信号不是 <white>{signal}</white>."
   start-cancelled: "<gray>轨道启动被其他插件取消."
   world-missing: "<gray>轨道所在世界 <white>{world}</white> 当前未加载."
-  finished: "<gray>镜头 <white>{track}</white> 已结束."
   list-header: "<gray>共 <white>{count}</white> 条轨道:"
-  list-empty: "<gray>还没有任何轨道. 使用 <white>/{label} edit create <id></white> 创建."
+  list-empty: "<gray>还没有任何轨道. 使用 <white>/{label} create <id></white> 创建."
   list-entry: "<dark_gray>· <click:run_command:'/{label} info {id}'><hover:show_text:'<gray>点击查看详情'><white>{id}</white></hover></click> <dark_gray>·</dark_gray> <gray>{name}</gray> <dark_gray>({steps} 步 / {ticks}t)</dark_gray>"
   info-header: "<white>{id}</white> <dark_gray>·</dark_gray> <gray>{name}</gray>"
   info-line: "<dark_gray>·</dark_gray> <gray>{label}: <white>{value}</white>"
-  info-preview: "<gray>预览: <click:run_command:'/{label} play {id}'><white>[开始]</white></click> <dark_gray>·</dark_gray> <click:run_command:'/{label} edit open {id}'><white>[编辑]</white></click>"
+  info-preview: "<gray>预览: <click:run_command:'/{label} play {id}'><white>[开始]</white></click> <dark_gray>·</dark_gray> <click:run_command:'/{label} editor {id}'><white>[编辑]</white></click>"
   info-no-steps: "<gray>该轨道还没有步骤."
 
 camera:
@@ -44,7 +42,6 @@ camera:
   fake-camera-unavailable: "<gray>当前未启用假玩家镜头：<white>blindness</white>/<white>slowness</white>/<white>speed</white> 不会产生画面，FOV 固定为 1.0；<white>darkness</white>/<white>night_vision</white> 仅部分生效. 安装 PacketEvents 后可启用."
   fake-camera-failed: "<gray>假玩家镜头创建失败，已回退到盔甲架镜头；FOV 和失明雾不可用."
   error: "<red>镜头发生错误，动画已结束."
-  ended: "<gray>镜头结束: {reason}."
   recovered: "<gray>已恢复上次中断的过场状态."
   recovery-world-missing: "<gray>无法恢复上次过场: 世界 <white>{world}</white> 未加载."
   recovery-failed: "<red>恢复上次过场状态失败，请联系管理员."
@@ -56,83 +53,94 @@ reload:
 
 manage:
   exists: "<gray>轨道 <white>{track}</white> 已存在."
-  created: "<gray>已创建轨道 <white>{track}</white>."
   deleted: "<gray>已删除轨道 <white>{track}</white>."
   delete-confirm: "<gray>这会删除轨道 <white>{track}</white>. 再次执行 <white>{command}</white> 确认."
   invalid-id: "<gray>轨道 id 只能包含小写字母、数字、<white>-</white> 和 <white>_</white>，最长 64 个字符."
   no-player: "<gray>创建轨道需要玩家视角作为起点，请由玩家执行."
   edit-busy: "<gray>轨道 <white>{track}</white> 正在被其他管理员编辑，请稍后再试."
-  delete-busy: "<gray>有管理员正在编辑轨道，请先退出编辑模式再删除."
 
 editor:
   already: "<gray>你已经在编辑轨道 <white>{track}</white>."
-  not-editing: "<gray>你当前不在编辑模式. 使用 <white>/camerarail edit open <id></white>."
+  not-editing: "<gray>你当前不在编辑模式. 使用 <white>/camerarail editor</white> 打开图形编辑器."
   opened: "<gray>正在编辑 <white>{track}</white>. 当前世界 <white>{world}</white>."
   created: "<gray>已创建轨道 <white>{track}</white>，起点为你当前视角."
   world-mismatch: "<gray>请先前往轨道所在世界 <white>{world}</white>."
-  status: "<gray>编辑 <white>{track}</white> <dark_gray>·</dark_gray> <gray>选中 {selected}</gray> <dark_gray>·</dark_gray> <gray>{count} 步</gray> <dark_gray>·</dark_gray> <gray>{duration}t</gray> <dark_gray>·</dark_gray> {state}"
-  state-saved: "<gray>已保存"
-  state-dirty: "<gray>保存中"
-  selected: "<gray>已选中步骤 <white>{index}</white>: {summary}"
-  start-set: "<gray>起点已更新为当前位置."
-  exit-set: "<gray>退出点已更新为当前脚下位置."
-  exit-mode-set: "<gray>退出点已改为 <white>{mode}</white>."
-  exit-mode-custom: "<gray>自定义退出点请用 <white>/camerarail edit exit</white> 取当前脚下位置."
-  added: "<gray>已追加步骤 <white>{index}</white>: {summary}"
-  updated: "<gray>已更新步骤 <white>{index}</white>: {summary}"
-  removed: "<gray>已删除步骤 <white>{index}</white>."
-  moved: "<gray>已移动步骤 <white>{index}</white>."
-  selected-index-invalid: "<gray>步骤编号必须在 <white>1</white> 到 <white>{max}</white> 之间."
-  no-step: "<gray>请先选择一个步骤."
-  not-camera-step: "<gray>该操作只适用于移动/路径/停留/等待步骤."
-  need-duration: "<gray>该步骤需要时长."
+  start-set: "<gray>已将 <white>{track}</white> 的起点设为当前视角."
+  exit-set: "<gray>已将 <white>{track}</white> 的退出点设为当前脚下位置."
+  exit-mode-set: "<gray>轨道 <white>{track}</white> 退出点已改为 <white>{mode}</white>."
+  exit-mode-custom: "<gray>还没有自定义退出点；先执行 <white>/{label} edit {track} exit</white> 取当前脚下位置，或 <white>exit <x> <y> <z></white>."
   need-path: "<gray>该步骤不是路径."
-  path-point-added: "<gray>已向路径追加一个路径点，共 <white>{count}</white> 个."
-  path-point-seeded: "<gray>已添加路径点，创建时与步骤起点重合的占位点已替换."
-  path-point-duplicate: "<gray>与上一个路径点位置相同，未添加路径点."
-  path-point-removed: "<gray>已删除路径最后一个点，剩余 <white>{count}</white> 个."
-  path-point-min: "<gray>路径至少需要保留一个点."
-  path-created: "<gray>已创建路径步骤，请继续用 <white>/camerarail edit point</white> 添加路径点."
-  path-needs-points: "<gray>路径步骤至少需要两个路径点才能预览."
+  path-point-added: "<gray>已向 <white>{target}</white> 追加路径点，共 <white>{count}</white> 个."
+  path-point-inserted: "<gray>已在 <white>{target}</white> 后插入路径点，共 <white>{count}</white> 个."
+  path-point-moved: "<gray>已移动路径点 <white>{target}</white>."
+  path-point-removed: "<gray>已删除路径点 <white>{target}</white>，剩余 <white>{count}</white> 个."
+  path-created: "<gray>已创建路径步骤 <white>{index}</white>. 用取景工具右键追加路径点，或 <white>/{label} edit {track}:{index} point add</white>."
   saved: "<gray>已保存轨道 <white>{track}</white>."
   save-failed: "<red>保存失败，请查看控制台."
-  nothing-to-undo: "<gray>没有可以撤销的操作."
   undone: "<gray>已撤销上一步编辑."
-  preview-started: "<gray>正在预览 <white>{track}</white>. 再次执行停止."
+  preview-started: "<gray>正在预览 <white>{track}</white>. 再次执行同一命令停止，或潜行退出."
   preview-stopped: "<gray>预览已停止."
-  preview-no-steps: "<gray>轨道还没有镜头步骤，无法预览."
   preview-active: "<gray>正在预览中，请先停止当前预览."
   closed: "<gray>已退出编辑模式."
+  usage: "<gray>用法: <white>/{label} editor [<轨道>|close]</white>."
   deleted: "<gray>已删除轨道 <white>{track}</white>."
-  delete-confirm: "<gray>再次执行 <white>{command}</white> 以删除轨道 <white>{track}</white>."
-  display-set: "<gray>显示名称已更新为 <white>{name}</white>."
-  sway-set: "<gray>轨道默认摇摆已设为 <white>{sway}</white>."
-  follow-set: "<gray>跟随区块加载已设为 <white>{value}</white>."
-  step-sway-set: "<gray>步骤摇摆已设为 <white>{sway}</white>."
-  duration-set: "<gray>步骤时长已设为 <white>{ticks}t</white>."
-  easing-set: "<gray>缓动已设为 <white>{easing}</white>."
-  title-set: "<gray>标题步骤已更新."
-  effect-added: "<gray>已追加效果步骤: {summary}"
-  wait-added: "<gray>已追加等待步骤: <white>{signal}</white>."
-  hold-added: "<gray>已追加停留步骤: <white>{ticks}t</white>."
-  cut-added: "<gray>已追加快切步骤."
-  path-added: "<gray>已追加路径步骤."
-  display-usage: "<gray>用法: <white>/camerarail edit display <名称></white>."
-  effect-usage: "<gray>用法: <white>/camerarail edit effect <add|remove> <效果> [等级] [时长]</white>."
-  title-usage: "<gray>用法: <white>/camerarail edit title <fade-in> <stay> <fade-out> <标题>|<副标题></white>."
-  wait-usage: "<gray>用法: <white>/camerarail edit wait <信号> [超时]</white>."
-  select-usage: "<gray>用法: <white>/camerarail edit select <索引></white>."
-  no-permission: "<gray>你没有权限编辑轨道."
-  duplicate-signal: "<gray>等待信号 <white>{signal}</white> 已存在."
+  display-set: "<gray>轨道 <white>{track}</white> 显示名称已更新为 <white>{name}</white>."
+  sway-set: "<gray>轨道 <white>{track}</white> 默认摇摆已设为 <white>{sway}</white>（周期 <white>{period}t</white>）."
+  follow-set: "<gray>轨道 <white>{track}</white> 跟随区块加载已设为 <white>{value}</white>."
+  step-sway-set: "<gray>步骤 <white>{target}</white> 摇摆已设为 <white>{sway}</white>."
+  duration-set: "<gray>步骤 <white>{target}</white> 时长已设为 <white>{ticks}t</white>."
+  easing-set: "<gray>步骤 <white>{target}</white> 缓动已设为 <white>{easing}</white>."
+  target-usage: "<gray>用法: <white>/{label} edit <轨道[:步骤[:路径点]]> <动作> [参数]</white>. 动作列表见 <white>/{label} help edit</white>."
+  edit-failed: "<gray>{reason}"
+  no-change: "<gray>没有需要写入的修改."
+  actions-hint: "<gray>可用动作: </gray>"
+  actions-hint-tail: "<gray> <dark_gray>·</dark_gray> 详情见 <white>{usage}</white></gray>"
+  action-usage: "<gray>用法: <white>/{label} edit {target} {syntax}</white>."
+  wrong-action-head: "<gray>目标 <white>{target}</white> 没有动作 <white>{action}</white>. <gray>可用动作: </gray>"
+  added-hint: "<gray>继续编辑: <click:suggest_command:'/{label} edit {target} '><white>/{label} edit {target}</white></click>；字段见 <white>/{label} help edit {type}</white>."
+  track-hint-head: "<gray>步骤与预览: </gray>"
+  track-settings-head: "<gray>轨道设置: </gray>"
+  display-too-long: "<gray>显示名称最长 64 个字符."
+  description-too-long: "<gray>说明最长 512 个字符."
+  description-set: "<gray>轨道 <white>{track}</white> 说明已更新为 <white>{description}</white>."
+  start-pose-set: "<gray>已将 <white>{track}</white> 的起点设为 <white>{pose}</white>."
+  exit-pose-set: "<gray>已将 <white>{track}</white> 的退出点设为 <white>{pose}</white>."
+  pose-set: "<gray>已将 <white>{target}</white> 设为 <white>{pose}</white>."
+  signal-set: "<gray>步骤 <white>{target}</white> 等待信号已设为 <white>{signal}</white>."
+  timeout-set: "<gray>步骤 <white>{target}</white> 等待超时已设为 <white>{ticks}t</white>（0 = 永不）."
+  title-text-set: "<gray>步骤 <white>{target}</white> 标题已更新为 <white>{text}</white>."
+  subtitle-set: "<gray>步骤 <white>{target}</white> 副标题已更新为 <white>{text}</white>."
+  fade-set: "<gray>步骤 <white>{target}</white> 标题时间已设为 <white>{fade_in}</white>t / <white>{stay}</white>t / <white>{fade_out}</white>t."
+  effect-step-set: "<gray>步骤 <white>{target}</white> 效果步骤已更新: {summary}"
+  entry-list-header: "<gray>入场效果 (<white>{count}</white>):"
+  entry-empty: "<gray>没有入场效果."
+  entry-list-entry: "<dark_gray>·</dark_gray> <white>{index}</white> <gray>{effect}</gray>"
+  entry-added: "<gray>已添加入场效果: {effect}"
+  entry-set: "<gray>已将入场效果 <white>{index}</white> 设为: {effect}"
+  entry-removed: "<gray>已删除入场效果 <white>{index}</white>."
+  entry-missing: "<gray>入场效果 <white>{index}</white> 不存在."
+  step-summary-move: "目标 {x}, {y}, {z} · yaw {yaw}° / pitch {pitch}° · {ticks}t · {easing} · 摇摆 {sway}"
+  step-summary-path: "{points} 个路径点 · {ticks}t · {easing} · 摇摆 {sway}"
+  step-summary-hold: "{ticks}t · 摇摆 {sway}"
+  step-summary-wait: "信号 {signal} · 超时 {timeout} · 摇摆 {sway}"
+  step-summary-cut: "目标 {x}, {y}, {z} · yaw {yaw}° / pitch {pitch}° · 停留 {ticks}t · 摇摆 {sway}"
+  step-summary-effect: "{effect}"
+  step-summary-title: "标题 {title} · 副标题 {subtitle} · {fade_in}/{stay}/{fade_out}t"
+  appended-step: "<gray>已向 <white>{track}</white> 追加步骤 <white>{index}</white>: {summary}"
+  step-status: "<gray><white>{track}:{index}</white> <dark_gray>·</dark_gray> <white>{type}</white> <dark_gray>·</dark_gray> <gray>{summary}</gray>"
+  step-missing: "<gray>轨道 <white>{track}</white> 没有步骤 <white>{index}</white>."
+  point-missing: "<gray>找不到路径点 <white>{target}</white>."
+  path-point-count: "<gray>共 <white>{count}</white> 个路径点."
+  point-status: "<gray><white>{target}</white> <dark_gray>·</dark_gray> <white>{x}, {y}, {z}</white> <dark_gray>·</dark_gray> <gray>yaw {yaw}° / pitch {pitch}°</gray>"
+  here-updated: "<gray>已用当前视角更新 <white>{target}</white>."
+  step-moved: "<gray>已把 <white>{track}:{from}</white> 移到 <white>{track}:{to}</white>."
+  step-removed: "<gray>已删除 <white>{track}:{index}</white>. 可用 <white>/{label} edit {track} undo</white> 撤销."
+  step-duplicated: "<gray>已复制 <white>{track}:{index}</white> 为 <white>{track}:{copy}</white>."
   invalid-effect: "<gray>未知的药水效果 <white>{effect}</white>. 可以使用 blindness、darkness、nausea、night_vision、slowness、speed 或带命名空间的 id."
-  invalid-title: "<gray>标题文本不是合法的 MiniMessage."
   invalid-value: "<gray>无效的值 <white>{value}</white>."
-  limit: "<gray>已达到限制: <white>{limit}</white>."
-  preview-other: "<gray>正在播放其他镜头，无法开始预览."
   preview-ended: "<gray>预览结束."
-  preview-failed: "<gray>预览启动失败."
 
-# /camerarail help 与 /camerarail edit help 的文字。
+# /camerarail help 与 /camerarail help edit 的文字。
 # 排版（缩进、对齐、点击填入）由插件绘制；这里提供文字。summary、标签与页脚支持 MiniMessage，
 # detail 为纯文本，会按聊天宽度自动换行。
 help:
@@ -140,14 +148,25 @@ help:
   scope:
     root: "镜头轨道"
     editor: "轨道编辑器"
+  target-hint: "<gray>目标: <white><轨道></white> · <white><轨道:步骤></white> · <white><轨道:步骤:路径点></white>."
+  target-hint-escape: "<gray>编号从 1 开始；Dialog 占用轨道时拒绝修改."
   group:
     track: "轨道"
     playback: "播放"
     editor: "编辑"
     manage: "管理"
-    enter: "进入"
     settings: "轨道"
+    entry: "入场"
     step: "步骤"
+    step-point: "步骤/路径点"
+    move: "移动"
+    path: "路径"
+    hold: "停留"
+    wait: "等待"
+    cut: "硬切"
+    effect: "效果"
+    title: "标题"
+    point: "路径点"
     preview: "预览"
     save: "保存"
   labels:
@@ -160,7 +179,7 @@ help:
     fill: "<dark_gray>点击填入命令</dark_gray>"
   footer:
     root: "<dark_gray>点击命令填入</dark_gray> <dark_gray>·</dark_gray> <gray>/{label} help <命令></gray> <dark_gray>查看详情</dark_gray>"
-    editor: "<dark_gray>点击命令填入</dark_gray> <dark_gray>·</dark_gray> <gray>/{label} edit help <命令></gray> <dark_gray>查看详情</dark_gray>"
+    editor: "<dark_gray>点击命令填入</dark_gray> <dark_gray>·</dark_gray> <gray>/{label} help edit <动作></gray> <dark_gray>查看详情</dark_gray>"
   not-found: "<gray>没有名为 <white>{command}</white> 的命令. 使用 <white>{usage}</white> 查看全部命令."
   no-commands: "<gray>你没有可用的子命令."
   detail:
@@ -194,13 +213,23 @@ help:
           - "<信号|*> 信号名，或 * 表示任意信号"
           - "[玩家] 目标玩家，默认自己"
       edit:
-        summary: "打开图形编辑器或编辑命令"
-        detail: "不带参数打开编辑器；edit help 列出编辑命令."
+        summary: "按目标层级编辑轨道"
+        detail: "目标分三层：<轨道> 改轨道设置、入场效果和步骤集合（list/add）；<轨道:步骤> 改该步骤的字段（随步骤类型不同）；<轨道:步骤:路径点> 改单个路径点。不带参数时列出动作，完整说明见 /{label} help edit."
         args:
-          - "[子命令] 见 /{label} edit help"
+          - "<目标> 轨道[:步骤[:路径点]]"
+          - "<动作> 见 /{label} help edit"
+      editor:
+        summary: "打开 Dialog 图形编辑器"
+        detail: "不带参数打开图形编辑器（轨道列表）；带轨道 id 直接打开该轨道的编辑会话；editor close 关闭当前编辑会话并释放轨道."
+        args:
+          - "[<轨道>] 轨道 id，省略则打开轨道列表"
+          - "close 关闭编辑会话"
+      tools:
+        summary: "打开编辑工具箱子"
+        detail: "领取取景工具与预览工具，也可以从 Dialog 编辑器的「编辑工具」按钮进入."
       create:
         summary: "以当前视角创建一条轨道"
-        detail: "创建后立即进入编辑模式，起点取当前眼睛位置."
+        detail: "起点取当前眼睛位置；创建后不占用 Dialog 编辑会话，可直接用 edit 命令或编辑器继续调整."
         args:
           - "<id> 轨道 id，只含小写字母、数字、- 和 _"
           - "[名称] 显示名称，可以包含空格"
@@ -214,146 +243,186 @@ help:
         summary: "重载轨道、配置与消息"
         detail: "有管理员正在编辑轨道时不会重载，避免覆盖未保存的修改."
     editor:
-      gui:
-        summary: "打开轨道列表编辑器"
-        detail: "等同于不带参数的 edit，列出全部轨道并可以新建或选择."
-      status:
-        summary: "查看当前编辑状态"
-        detail: "显示轨道、选中步骤、步骤数、总时长和保存状态."
-      list:
-        summary: "列出当前轨道的步骤"
-        detail: "点击条目可以选中对应步骤."
-      help:
-        summary: "列出全部编辑命令"
-        detail: "可以接命令名查看详情，例如 help add."
-        args:
-          - "[命令] 编辑命令名"
-      done:
-        summary: "退出编辑模式"
-        detail: "修改已自动保存，预览会同时停止；close 是同义写法."
-      open:
-        summary: "打开一条已有轨道"
-        detail: "进入该轨道的编辑模式."
-        args:
-          - "<id> 轨道 id，见 /{label} list"
-      create:
-        summary: "以当前视角创建并编辑轨道"
-        detail: "起点取当前眼睛位置，创建后立即进入编辑模式."
-        args:
-          - "<id> 轨道 id"
-          - "[名称] 显示名称，可以包含空格"
-      delete:
-        summary: "删除正在编辑的轨道"
-        detail: "需要 confirm 确认；被其他管理员编辑时不能删除."
-        args:
-          - "[confirm] 确认删除"
-      start:
-        summary: "把轨道起点设为当前视角"
-        detail: "起点是镜头眼睛的位置，通常要高于地面."
-      exit:
-        summary: "把退出点设为自定义的当前脚下位置"
-        detail: "用于 exit-mode: custom；省略 exit-mode 时默认停在镜头最后位置."
-      exit-mode:
-        summary: "设置退出点模式"
-        detail: "animation-end 停在镜头最后位置（默认），pre-entry 回到进入前位置；custom 用 exit 取当前脚下位置."
-        args:
-          - "<模式> animation-end 或 pre-entry"
       display:
         summary: "设置轨道显示名称"
         detail: "显示名称用于列表和提示，可以与 id 不同."
         args:
           - "<名称> 可以包含空格"
-      track-sway:
+      description:
+        summary: "设置轨道说明"
+        detail: "说明会显示在轨道信息里；留空表示清除."
+        args:
+          - "[说明] 可以包含空格"
+      start:
+        summary: "设置轨道起点"
+        detail: "不带参数时取当前视角；带坐标时写入眼睛位置，yaw/pitch 省略时保留当前朝向."
+        args:
+          - "[x y z [yaw pitch]] 省略则取当前视角"
+      exit:
+        summary: "设置自定义退出点"
+        detail: "不带参数时取当前脚下位置；设置后退出模式自动切到 custom."
+        args:
+          - "[x y z [yaw pitch]] 省略则取当前脚下位置"
+      exit-mode:
+        summary: "设置退出点模式"
+        detail: "animation-end 停在镜头最后位置（默认），pre-entry 回到进入前位置，custom 使用 exit 设置的位置."
+        args:
+          - "<模式> animation-end、pre-entry 或 custom"
+      sway:
         summary: "设置轨道默认摇摆"
-        detail: "所有继承轨道设置的步骤都会使用这个摇摆."
+        detail: "步骤的 sway 继承这个设置；周期省略时保留当前值."
         args:
           - "<预设> off、gentle、natural 或 strong"
+          - "[周期] 摇摆周期（tick）"
       follow:
         summary: "设置是否跟随区块加载"
-        detail: "开启后玩家随镜头跨区块移动，保证附近区块持续加载."
+        detail: "开启后玩家随镜头移动，附近区块持续加载."
         args:
           - "<true|false> 开启或关闭"
+      entry:
+        summary: "管理入场效果"
+        detail: "入场效果只在镜头从起点开始时施加；set/remove 使用 entry list 里的序号."
+        args:
+          - "list 列出入场效果"
+          - "add <效果> [等级] [时长] 追加"
+          - "set <序号> <效果> [等级] [时长] 修改"
+          - "remove <序号> 删除"
+      list:
+        summary: "列出轨道的步骤"
+        detail: "每行附带可点击的步骤命令，先看再改."
       add:
-        summary: "从当前视角追加移动步骤"
-        detail: "移动步骤从上一个姿态平滑插值到当前视角."
+        summary: "追加一个步骤"
+        detail: "按类型追加到轨道末尾；省略参数时取与 Dialog 相同的默认值，再用步骤层字段（duration/easing/sway 等）修改，顺序用 up/down 调整."
         args:
-          - "[时长] 单位 tick，默认取配置值"
-      cut:
-        summary: "追加快切步骤"
-        detail: "硬切到当前视角，不做插值；可选停留时长让镜头在新姿态保持一段时间，0 表示纯瞬时硬切，不占时间轴."
+          - "<类型> move、path、hold、wait、cut、effect 或 title"
+          - "move [时长] 以当前视角追加移动步骤"
+          - "path [时长] 追加路径步骤，首个路径点取当前视角"
+          - "hold [时长] 追加停留步骤"
+          - "wait [信号] [超时] 省略信号时自动生成该轨道未占用的名字：wait、wait2、wait3…"
+          - "cut [停留] 追加快切步骤，0 表示瞬时"
+          - "effect [add|remove] [效果] [等级] [时长] 省略动作视为 add，省略效果时为 darkness"
+          - "title [淡入 停留 淡出] <标题>[|<副标题>] 三数字形式，自定义淡入/停留/淡出"
+          - "title <标题>[|<副标题>] 便捷形式，淡入/停留/淡出取 20 60 20"
+      remove:
+        summary: "删除步骤或路径点"
+        detail: "删除步骤时可用轨道 undo 撤销；删除路径点时至少保留一个点."
+      duplicate:
+        summary: "复制步骤"
+        detail: "把这一步复制到它后面."
+      up:
+        summary: "上移一步"
+        detail: "与上一步交换位置."
+      down:
+        summary: "下移一步"
+        detail: "与下一步交换位置."
+      move:
+        summary: "移动步骤的字段"
+        detail: "here 取当前视角作为目标；pos 直接写坐标；duration/easing/sway 修改时间与镜头晃动."
         args:
-          - "[时长] 硬切后停留 tick，默认 0"
+          - "here 目标设为当前视角"
+          - "pos <x> <y> <z> [yaw] [pitch] 显式目标"
+          - "duration <tick> 时长"
+          - "easing <曲线> 缓动"
+          - "sway <预设> 步骤摇摆"
       path:
-        summary: "追加路径步骤"
-        detail: "之后用 point 逐个追加以当前视角为路径点的位置."
-      point:
-        summary: "给选中路径步骤追加路径点"
-        detail: "取当前眼睛位置作为新的路径点."
-      unpoint:
-        summary: "删除选中路径步骤的最后一个路径点"
-        detail: "路径至少保留一个路径点."
+        summary: "路径步骤的字段"
+        detail: "路径点用 point 管理；duration/easing/sway 控制整段路径."
+        args:
+          - "duration <tick> 时长"
+          - "easing <曲线> 缓动"
+          - "sway <预设> 步骤摇摆"
+          - "point <list|add> 列出或追加路径点"
       hold:
-        summary: "追加停留步骤"
-        detail: "保持当前姿态一段时间."
+        summary: "停留步骤的字段"
         args:
-          - "<时长> 单位 tick"
+          - "duration <tick> 时长"
+          - "sway <预设> 步骤摇摆"
       wait:
-        summary: "追加等待信号步骤"
-        detail: "镜头停在这里，直到收到同名信号或超时."
+        summary: "等待步骤的字段"
         args:
-          - "<信号> 信号名，最长 80 个字符"
-          - "[超时] 单位 tick，默认取配置值，0 表示不超时"
+          - "signal <信号> 等待的信号"
+          - "timeout <tick> 超时，0 表示永不"
+          - "sway <预设> 步骤摇摆"
+      cut:
+        summary: "硬切步骤的字段"
+        detail: "here/pos 设置切到的位置；duration 是切后的停留时间."
+        args:
+          - "here 目标设为当前视角"
+          - "pos <x> <y> <z> [yaw] [pitch] 显式目标"
+          - "duration <tick> 停留时间"
+          - "sway <预设> 步骤摇摆"
       effect:
-        summary: "追加药水效果步骤"
-        detail: "effect 是瞬时步骤，duration 只决定效果持续时间，不阻塞后续动画. 时长为 0 时持续到被显式移除或轨道结束；darkness 的淡入/淡出约 22 tick. FOV、blindness 和 slowness/speed 需要 PacketEvents 假玩家镜头，未安装时自动回退到盔甲架镜头."
+        summary: "效果步骤的字段"
+        detail: "action 为 add 时等级/时长生效；remove 只需要效果 id."
         args:
-          - "<add|remove> 添加或移除效果"
-          - "<效果> 效果 id 或常见缩写"
-          - "[等级] 从 0 开始"
-          - "[时长] 单位 tick，0 表示持续到移除"
+          - "<add|remove> 施加或移除"
+          - "<效果> 效果 id"
+          - "[等级] 0 = I 级"
+          - "[时长] tick，0 = 持续"
       title:
-        summary: "追加标题步骤"
-        detail: "用 | 分隔标题和副标题，两侧支持 MiniMessage."
+        summary: "标题步骤的字段"
+        detail: "title/subtitle 支持 MiniMessage，省略文本表示清除；fade 依次设置淡入、停留、淡出."
         args:
-          - "<fade-in> <stay> <fade-out> 单位 tick"
-          - "<文本> 标题|副标题"
-      here:
-        summary: "把选中步骤的坐标改为当前视角"
-        detail: "未选中步骤时更新起点；移动和硬切改目标，路径会追加路径点."
-      select:
-        summary: "选中一个步骤"
-        detail: "选中后可以修改时长、缓动和摇摆."
-        args:
-          - "<索引> 从 1 开始"
+          - "title [文本] 主标题，留空清除"
+          - "subtitle [文本] 副标题，留空清除"
+          - "fade <淡入> <停留> <淡出> 时间（tick）"
       duration:
-        summary: "设置选中步骤的时长"
-        detail: "对移动、路径、停留和硬切步骤有效；硬切的 0 表示纯瞬时硬切."
+        summary: "修改步骤时长"
+        detail: "适用于 move/path/hold/cut 步骤（wait 用 timeout）；单位 tick，20 tick = 1 秒."
         args:
-          - "<时长> 单位 tick"
+          - "<tick> 时长"
       easing:
-        summary: "设置选中步骤的缓动"
-        detail: "只对移动和路径步骤有效."
+        summary: "修改步骤缓动"
+        detail: "适用于 move/path 步骤；值同 Easing."
         args:
           - "<曲线> linear、ease-in、ease-out、ease-in-out、smoothstep、smootherstep 或 sine"
-      sway:
-        summary: "设置选中步骤的摇摆"
-        detail: "inherit 表示沿用轨道默认摇摆，off 表示关闭."
+      signal:
+        summary: "修改等待信号"
+        detail: "wait 步骤等待的信号名；同一轨道内不能重复，可用 /{label} advance <信号> 发送."
         args:
-          - "<预设> inherit、off、gentle、natural 或 strong"
-      up:
-        summary: "把选中步骤上移一位"
-      down:
-        summary: "把选中步骤下移一位"
-      remove:
-        summary: "删除选中步骤"
-      undo:
-        summary: "撤销最近一次修改"
-        detail: "最多保留最近 30 次修改."
+          - "<信号> 信号名"
+      timeout:
+        summary: "修改等待超时"
+        detail: "wait 步骤的超时；0 表示永不超时."
+        args:
+          - "<tick> 超时（tick），0 = 永不"
+      subtitle:
+        summary: "修改标题步骤的副标题"
+        detail: "支持 MiniMessage；省略文本表示清除."
+        args:
+          - "[文本] 副标题，留空清除"
+      fade:
+        summary: "修改标题步骤的时间"
+        detail: "依次设置淡入、停留、淡出（tick）."
+        args:
+          - "<淡入> <停留> <淡出> 时间（tick）"
+      point:
+        summary: "路径步骤的路径点"
+        detail: "追加路径点会取当前视角；具体点的修改用 <轨道:步骤:路径点>."
+        args:
+          - "list 列出路径点"
+          - "add 追加当前视角"
+      here:
+        summary: "取当前视角"
+        detail: "move/cut 步骤写目标姿态，路径点写该点坐标."
+      pos:
+        summary: "显式设置姿态"
+        detail: "move/cut 步骤写目标姿态，路径点写该点坐标；yaw/pitch 省略时保留原朝向."
+        args:
+          - "<x> <y> <z> 坐标"
+          - "[yaw] [pitch] 朝向角度"
+      insert:
+        summary: "在路径点后插入当前视角"
+        detail: "先用当前视角插入一个新路径点，再修改它."
       preview:
-        summary: "从头预览当前轨道"
-        detail: "再次执行会停止预览；预览结束后回到原位置."
+        summary: "从目标开始预览"
+        detail: "轨道目标从起点播放，步骤目标从该步骤开始；再次执行同一命令即停止，也可用 stop 或潜行退出."
       stop:
         summary: "停止预览"
+        detail: "停止 preview 启动的预览；轨道、步骤、路径点目标都接受 stop."
+      undo:
+        summary: "撤销该轨道最近一次修改"
+        detail: "每个玩家最多保留 30 次修改，只对命令/工具编辑生效."
       save:
-        summary: "立即保存当前轨道"
+        summary: "立即保存轨道"
         detail: "修改本来就会自动保存，这个命令用于强制写入."

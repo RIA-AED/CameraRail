@@ -64,8 +64,11 @@ public interface CameraService {
     boolean advance(Player player);
 
     /**
-     * Reloads tracks.yml, config.yml and messages.yml. Returns the number of loaded tracks,
-     * or -1 on a fatal error.
+     * Reloads tracks.yml, config.yml and messages.yml. Returns the number of loaded tracks, or
+     * -1 when the reload was refused (a Dialog editor session is open) or tracks.yml reported any
+     * error. A refused or fatal reload leaves the in-memory tracks unchanged; when only some
+     * tracks fail to parse, the others are reloaded, the failing ones keep their previous version,
+     * and the command-side undo history is cleared.
      */
     int reload();
 }

@@ -4,7 +4,7 @@
 # 完整的字段说明见 docs/yaml-reference.md。
 #
 # 运行 /camerarail reload 后，可以用 /camerarail play login 预览。
-# 如果 world 名称与你的服务器不同，请改掉它，或直接用 /camerarail edit create login。
+# 如果 world 名称与你的服务器不同，请改掉它，或直接用 /camerarail create login（以当前视角新建一条轨道）。
 
 schema-version: 1
 
@@ -12,7 +12,7 @@ tracks:
   # 示例：登录过场。玩家在暗处等待外部信号，登录完成后镜头穿过三个路径点。
   # 结束位置默认是动画最后的位置；需要安全落点时写 exit-mode: pre-entry，
   # 或用 exit-mode: custom + exit（玩家脚部位置）指定固定落点。
-  # 这里的坐标只是示例；请用 /camerarail edit create 在你自己的场景里重新录制。
+  # 这里的坐标只是示例；请用 /camerarail create 在你自己的场景里重新录制。
   login:
     display-name: "登录 · 晨雾"
     description: "登录期间的镜头过场示例。"

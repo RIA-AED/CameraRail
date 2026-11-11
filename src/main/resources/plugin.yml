@@ -1,5 +1,5 @@
 name: CameraRail
-version: 1.1.0
+version: 1.1.1
 main: red.ria.camerarail.CameraRailPlugin
 api-version: '26.1.2'
 folia-supported: true
@@ -27,10 +27,10 @@ permissions:
     description: 发送等待信号。
     default: op
   camerarail.edit:
-    description: 使用游戏内轨道编辑器。
+    description: 使用游戏内编辑器与编辑工具（获取及使用）。
     default: op
   camerarail.manage:
-    description: 创建和删除轨道。
+    description: 创建和删除轨道（同时需要 camerarail.edit）。
     default: op
   camerarail.reload:
     description: 重载配置与轨道。

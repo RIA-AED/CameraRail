@@ -69,7 +69,8 @@ invisible 实体，若把盔甲架发给客户端，会在镜头位置出现半�
   需要原地转身请用 `move`（`to` 写同一位置、不同 yaw）或 `cut`，不要靠在 `path` 里放重复点。
 - 编辑器在追加/插入路径点时还会拦截这类退化点：捕获姿态与相邻路径点（或新建步骤的占位点）位置差
   < 0.01 格就替换占位点或拒绝写入。判断只看位置而不看视角：同一位置的第二个点不产生移动，原地转身应
-  用 `move`，这样也能挡住“对话框切换期间视角被晃了一下”写出的重复点（实现见 `PathPoints`）。
+  用 `move`，这样也能挡住“对话框切换期间视角被晃了一下”写出的重复点（实现见 `PathPoints`）。无状态
+  编辑命令与编辑工具走同一套 `PathPoints` 校验，不会绕过重复点与上限检查。
 - 替换占位点不算新增点数：`limits.max-path-points` 配置为 1 时，创建路径后的第一次追加仍会用真实路径点替换占位点（点数保持 1）；只有真正增加点数才会被上限拒绝。
 - 例外：整条路径的所有关键帧位置都相同时，总弧长为 0，`at()` 会退化为按采样均匀分配，视角是平滑转过去的；上面“重合点不占用时间轴、瞬间转向”的描述只适用于有位移的路径。
 
@@ -93,10 +94,158 @@ Dialog 里的按钮都是一次性的 `customClick` 回调，点完窗口就换�
   Esc 就创建一个新对象。
 - 选择器（已有信号、常用效果）只暂存选择；它们的底栏返回与 Esc 也回到原表单并带上暂存值。
 - 只有“取消”和“删除”会丢掉未保存的输入。
+- 带 `afterAction(CLOSE)` 的 Dialog 会在 click 回调返回后才关闭；如果回调在同一 tick 打开下一屏，新
+  Dialog 会被随后的关闭动作吞掉（表现为点分页/进入后直接回到游戏）。因此列表分页、返回、表单导航等
+  跨屏按钮统一延迟 2 tick 再 `showDialog`。另外多按钮网格单列超过约 8 行时会与底栏重叠，列表类界面
+  （轨道、步骤、路径点、入场效果、工具选择器、信号/效果选择器）使用两列布局。
 
 实现：`PendingSave` + `saveAction`（动作前保存）/`saveExplicitly`（显式保存）两种包装；各表单的
 `applyXxx` 负责校验/写入并返回 `SaveOutcome`（`SAVED`/`UNCHANGED`/`FAILED`），`FAILED` 表示表单
 已带着错误重新打开、调用方不得继续导航。
+
+## 无状态编辑命令与编辑工具
+
+### 目标层级：与 Dialog 一一对应
+
+命令编辑不再依赖编辑会话里隐藏的“选中步骤”：旧流程先 `edit select <索引>` 再执行 `edit here`/`edit duration`，
+命令的结果取决于此前的命令历史，选错步骤、在错误的轨道上执行或另一名玩家同时编辑都会把修改写到意外位置。
+现在每条命令都自带目标 `EditTarget`，写作 `<轨道>[:<步骤>[:<路径点>]]`；命令层是 1-based，`EditTarget` 内部
+0-based（`NO_STEP`/`NO_POINT` 为 `-1`）。UI 入口仍是根命令 `/camerarail editor [<轨道>|close]`：不带参数
+打开轨道列表，带轨道 id 直接打开该轨道，`close` 关闭编辑会话并释放轨道。三层目标的动作集合刻意复刻
+Dialog 的页面结构：
+
+- **轨道层**（Dialog 的轨道概览）：`display`/`description`/`start`/`exit`/`exit-mode`/`sway`/`follow`
+  对应轨道设置、起点与退出点；`entry` 对应入场效果列表；`list`/`add <类型>` 对应步骤列表与“添加步骤”；
+  `preview` 是开关（预览中再次执行即停止），`stop` 在轨道/步骤/路径点三层都能停止预览，`undo`/`save`
+  对应概览和步骤列表上的撤销与保存。
+- **步骤层**（Dialog 的步骤表单）：动作按 `Step` 类型分派，只有该类型表单里存在的字段才会被接受。例如
+  `title` 步骤只有 `title`/`subtitle`/`fade`，`wait` 步骤只有 `signal`/`timeout`/`sway`；`duration` 属于
+  move/path/hold/wait/cut，`easing` 只有 move/path，`sway` 属于五种带摇摆的步骤，写错类型时提示该步骤
+  实际可用的动作。
+  `here`/`pos` 是 move/cut 的“取当前视角/显式坐标”，对 path 步骤会被拒绝并列出该步骤实际可用的动作
+  （`duration`/`easing`/`sway`/`point` 等）。
+- **路径点层**（Dialog 的路径点表单）：`here`/`pos`/`remove`/`up`/`down`/`insert`/`stop`，与路径点表单的
+  “取当前视角/显式坐标/删除/上移/下移/插入当前视角”对应；`stop` 用于结束当前预览。
+- **共有结构动作**：`remove`/`duplicate`/`up`/`down`/`preview`/`stop` 对所有步骤可用，对应步骤表单里的
+  同名按钮；`preview` 同样是开关，`stop` 也接受路径点目标用于结束预览。
+
+`EditTarget.parse` 是严格的：先把轨道 id 转成小写，再按 `[a-z0-9][a-z0-9_-]{0,63}` 校验（大写输入会被
+接受并规范化），索引必须是正整数；解析失败返回 `null`，命令层显示用法而不是猜一个目标。轨道 id 统一
+小写，与 `TrackRepository` 的大小写不敏感查找一致。
+`edit` 后面第一个参数固定是目标参数，因此轨道 id 与根命令 `help`/`tools` 同名时也不需要转义；UI 入口在
+根命令（`/camerarail editor [<轨道>|close]`、`/camerarail tools`、`/camerarail help edit`），同一个位置不会
+既当子命令又当参数。`editor close` 是关闭会话的保留写法，id 为 `close` 的轨道请从编辑器的轨道列表打开。
+
+- `add <类型>` 与 Dialog 的“添加步骤”一致，追加到轨道末尾并使用 Dialog 的默认值（之后再用步骤层字段改）；
+  也接受便捷写法：`add move|path|hold [时长]`、`add cut [停留]`、`add wait [信号] [超时]`（省略信号时
+  自动生成唯一名 `wait`/`wait2`…）、`add effect [add|remove] [效果] [等级] [时长]`（省略动作视为 `add`，
+  可直接 `add effect blindness`）、`add title [标题[|副标题]]` 或
+  `add title <淡入> <停留> <淡出> <标题>[|<副标题>]`。需要调整顺序时用步骤层 `up`/`down`，不提供任意位置
+  插入。
+- 轨道级 `list` 列出步骤，每行携带该步骤目标的点击事件，点击即填入 `<轨道>:<步骤>`，“先看再改”因此不需要
+  额外的选中状态；路径步骤的 `point list` 同理。
+- 命令层负责参数解析（枚举、整数、坐标、范围夹取）、权限检查、消息，以及目标定位（轨道/步骤/路径点/
+  入场效果序号是否存在）；步骤数、总时长、`wait` 信号唯一、路径点上限、MiniMessage 严格解析、轨道
+  id 与世界不可变等结构性校验集中在纯 Java 的 `TrackRules`（id 规则来自 `TrackId`，strict MiniMessage
+  来自 `MiniMessages`），命令侧与 Dialog 侧共用同一套规则，只在错误文案包装上各自处理：命令层越界时用
+  `messages.yml` 文案，`TrackRules`/`EditService` 返回内部错误文本由调用方展示。
+
+### 提示、补全与帮助主题
+
+- **可点击动作**：`CameraCommand.actionLines` 把动作行拆成 head、click-to-fill 动作片段和 tail；
+  `sendActions` 负责加前缀并按聊天栏宽度换行（预留前缀与 4 px）。每个片段的点击命令是
+  `/label edit <目标> <动作> `，tail 固定为「详情见 `/label help edit <动作>`」（`editor.actions-hint-tail`）。
+  使用方：步骤/路径点状态（head `editor.actions-hint`）、写错动作（head `editor.wrong-action-head`）、
+  `edit <轨道>` 状态的两行（head `editor.track-hint-head`「步骤与预览」与 `editor.track-settings-head`
+  「轨道设置」，动作集合分别是 list/add/preview/stop/undo/save 与 display/description/start/exit/
+  exit-mode/sway/follow/entry）、`list` 的头部（add/preview）。编辑视图不输出 `/play` 链接：
+  `statusTrack` 走 `sendTrackFields`，只有 `/camerarail info` 的 `sendTrackInfo` 才带 `track.info-preview`。
+- **成功提示带目标**：命令层给消息传 `track` 或 `target` 占位符——轨道级 display/description/exit-mode/
+  sway（含周期）/follow 等回显轨道 id，步骤级 duration/easing/step-sway/signal/timeout/title/subtitle/
+  fade/effect 等回显 `<轨道:步骤>`。
+- **补全规则**：`editCompletion` 在第一个参数精确命中轨道 id 时同时给出 `id:`（可继续补步骤号、路径点号）；
+  路径点目标只有在路径步骤存在且点号有效时才补全动作，否则返回空；`advanceSuggestions` 总是包含 `*`；
+  `editorArguments` 给轨道 id 加上 `close`；`help edit` 补全 `CommandHelp.names(Scope.EDITOR)`。
+- **帮助主题**：`EDITOR_TOPICS`（duration/easing/signal/timeout/subtitle/fade）只出现在 `help edit <字段>`
+  的详情页与补全里，不占 overview 行；`Entry.usage` 让 move/path/hold/wait/cut 这些“类型摘要行”的详情用法
+  渲染成 `<here|pos|…>` 而不是一条伪命令；`description [说明]`、`title`/`subtitle [文本]` 的方括号表示可省略
+  （省略即清除），`here`/`pos` 归入 `Group.STEP_OR_POINT`（帮助里显示「步骤/路径点」）。
+- 以上 head/tail/usage 文案都在 `messages.yml`；本次清理删除了 41 个不再被代码引用的旧键，命令层引用的键
+  在 YAML 中全部存在。
+
+### 命令编辑与 Dialog 编辑器解耦
+
+`EditService`（命令与物品工具）和 `EditorManager`（Dialog 会话）是两套独立的编辑入口，只通过
+`EditorLocks` 共享“哪条轨道正被 Dialog 会话占用”这一件事：
+
+- **Dialog 编辑器**只维护会话草稿、会话撤销历史（`EditorSession`）和 UI 状态。打开轨道时用
+  `EditorLocks.tryLock(trackId, playerId)`（`ConcurrentHashMap.putIfAbsent`，同一条轨道只会有一个会话
+  拿到锁），拿到锁之后才在 `TrackRepository.compute` 里读草稿；关闭会话/退出/删除时 unlock。每次改动仍
+  立即写回 `TrackRepository`，但撤销栈是会话自己的。
+- **命令与物品工具**不读写会话草稿：所有修改都走 `TrackRepository.compute(id, changer)`，读当前值、改动、
+  校验、写回在仓库的单把写锁内完成，因此来自不同 Folia 区域线程的编辑会依次应用，不会互相覆盖。
+  撤销记录是 `UndoHistory`（每玩家 30 条，条目保存 before+after 快照；`CameraTrack` 不可变，无需拷贝）。
+- **冲突处理**：命令侧对 Dialog 占用的检查放在 `compute` 的写锁内，和它保护的写入是同一个原子步骤；
+  Dialog 先 `tryLock` 再读草稿，所以命令写入要么发生在草稿读取之前（草稿看得到），要么被锁检查拒绝。
+  轨道被 Dialog 会话占用就拒绝（包括自己的会话，提示先关闭编辑器会话，可用 `/camerarail editor close`
+  释放），避免命令悄悄覆盖会话草稿、反过来 Dialog 的保存也不会覆盖命令的写入。
+- **仓库快照**：`TrackRepository` 只有一把写锁（`synchronized (writeLock)` 覆盖 compute/delete 与 reload
+  的整表替换），轨道表用不可变 `Map` 快照经 volatile 字段发布，所以 `all()`/`get()` 在锁外读取，读者看到
+  的一定是某个完整版本。
+- **reload 守卫**：`CameraRailPlugin.reloadEverything()` 自己检查 `editors.hasEditors()`，有 Dialog 会话时
+  记一条 warning 并返回 `-1`（不替换轨道表、不清撤销历史）；`/camerarail reload` 与 `CameraService.reload()`
+  走同一入口，因此都安全。`tracks.yml` 存在个别解析错误时也返回 `-1`，但其余轨道仍会重载、失败轨道保留
+  上一版本，撤销历史随这次非致命重载一起清空。
+- 结构校验只有一处实现：`TrackRules.validate(base, updated, cfg)` 覆盖步骤数、总时长、`wait` 信号唯一、
+  路径点上限、title/subtitle 的 strict MiniMessage、轨道 id 与世界不可变，命令侧与 Dialog 侧都调用它；
+  id 正则与 strict MiniMessage 也分别只在 `TrackId` 与 `MiniMessages` 里定义一次。
+- **取景与坐标**：`captureStart`/`captureExit`/`capturePose` 取玩家当前视角或脚下位置，要求玩家与轨道在
+  同一世界（预览中也会被拒绝）；`setStartPose`、`setExitPose`、`setPose`（move/cut 目标或路径点）、
+  `setPathPointPose` 写入显式坐标，不要求同世界；`setPose` 对 path 步骤报错，路径点走 `setPathPointPose`。
+- **入场效果**：`addEntryEffect`/`setEntryEffect`/`removeEntryEffect` 只改 `entryEffects` 列表，序号由命令层
+  转成 0-based；效果 action 固定为 ADD，与 Dialog 的入场效果表单一致。
+- **预览**：命令/工具直接调用 `CameraEngine.playPreview(player, trackId, start)`（预览到轨道末尾），不触碰
+  Dialog 会话的 `previewing` 标记；`edit <轨道> preview` 是开关，预览中再次执行（或在任意层级用 `stop`）
+  即停止，预览始终允许 Shift 退出。Dialog 预览仍走 `EditorManager.startPreview`，由 `CameraTrackEndEvent`
+  重开界面。两边共用引擎的“预览结束回原位置”和 Shift 退出。
+
+### 命令撤销栈
+
+- `EditService` 按玩家维护撤销历史 `UndoHistory`（`Deque<Entry>`，每条记录轨道 id 和修改前/后的
+  `CameraTrack` 快照），整个栈上限 30 条；`CameraTrack` 不可变，快照不需要深拷贝。
+- 每次成功的编辑（新建轨道不算撤销）都在 `TrackRepository.compute` 内压入 before+after；`/camerarail edit <轨道> undo` 在同一个
+  compute 周期里把记录的 after 与仓库当前值比较：相等才恢复 before 并移除该条，否则说明轨道被其他玩家、
+  Dialog 会话、reload 或手改的 `tracks.yml` 修改过，撤销被拒绝并提示“轨道在撤销后被修改过，无法撤销.”，
+  不会覆盖别人的改动。没有记录时提示“没有可以撤销的修改”。
+- 删除轨道时仓库的删除钩子（在写锁外）让每条历史丢弃该轨道的条目：删除后立刻 undo 会因为轨道已不存在而
+  提示“找不到轨道 <id>.”；之后若用同名 id 新建轨道，旧的撤销记录也不会套到新轨道上（undo 提示“没有
+  可以撤销的修改.”）。被拒绝的过期条目仍留在栈里，后续再撤销时重新比对。
+- reload 只要 `tracks.reload()` 不是致命失败（文件本身可读），撤销历史就会在仓库写锁内清空——包括“个别轨道解析失败、其余仍重载”的情况；文件完全无法读取（fatal）或被 Dialog 守卫拒绝时历史保留。
+  撤销历史只存在内存里，玩家退出（`PlayerQuitEvent`）时清空，不跨重启持久化。
+- Dialog 会话内的撤销是另一条独立的历史（`EditorSession`）。
+
+### 编辑工具
+
+`EditorTools` 提供两件物品工具，箱子 GUI 由 `ToolSelectorUI` 绘制；入口是 `/camerarail tools` 和 Dialog
+编辑器轨道列表/概览里的“编辑工具”按钮，二者都要求 `camerarail.edit` 权限。
+
+- **物品标记**：工具是带 `PersistentDataContainer` 标记键的普通木棒/末影之眼（键在本插件命名空间下），按标记
+  区分类型，不依赖 display name 或 lore，玩家改名或复制同类物品不会被误认。
+- **选择状态**：每名玩家的当前目标（取景工具：轨道 + 起点/退出点/路径步骤；预览工具：轨道 + 起始步骤）只
+  保存在内存 map 里，不写回物品；重新登录后需要重新选择目标，工具物品本身留在背包。
+- **ActionBar 循环**：取得工具后为玩家保留一个 10 tick 的 `EntityScheduler` 循环，手持工具时刷新
+  ActionBar 显示当前目标与下一步提示（背包/箱子暂存时循环不取消，重新持有后立即点亮）；退出后取消。
+  写入成功、重复路径点、超出 `limits.max-path-points`、不在轨道世界、预览中等结果都走 ActionBar，
+  不刷聊天栏。
+- **操作**：取景工具右键调用 `EditService.captureStart`/`captureExit`/`appendPathPoint`；预览工具右键调用
+  `EditService.preview`，与命令编辑共用同一套校验、保存与撤销路径。预览开始后玩家被切换为旁观者，
+  客户端不会再发送物品交互包，因此“预览中右键停止”不可达；退出预览用 Shift，或执行
+  `/camerarail edit <轨道> preview`（开关，再执行一次即停止）与任意层级 `stop`（预览会话恒允许 Shift 退出），
+  ActionBar 也这样提示。`stopPreview` 保留给命令与事件真正到达时使用。
+- **交互去重**：右键经 `PlayerInteractEvent` 处理并做去重，同一次点击产生的重复事件只处理一次；Shift+右键
+  优先打开目标选择器，避免一次点击既写点又切换预览。
+- **Folia**：工具选择状态与预览都是玩家本地状态，工具操作统一在 `player.getScheduler()` 上执行，不跨区域
+  直接操作实体。
 
 ## 定位条隐藏
 
@@ -152,7 +301,7 @@ Folia 下镜头实体跨 region（例如远距离 `cut`）时，服务端会把�
 - 编辑器轨道概览显示“镜头模式: 盔甲架回退 · FOV/失明雾不可用”；
 - `/camerarail info <id>` 显示“镜头模式: 假玩家 (PacketEvents)”或“镜头模式: 盔甲架回退”；
 - 效果选择器摘要与效果表单显示回退说明；
-- `/camerarail edit effect add ...` 追加镜头相关效果后，聊天栏追加同样的提示。
+- `/camerarail edit <轨道> add effect ...` 追加镜头相关效果后，聊天栏追加同样的提示。
 
 ## 协议与兼容性限制
 

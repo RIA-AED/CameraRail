@@ -60,7 +60,7 @@ java -jar paper-26.1.2-74.jar nogui
 4. 自然结束 `CameraTrackEndEvent` 的 `completed=true`，玩家按 `exit-mode` 落点（默认停在镜头最后的位置）并恢复原游戏模式。
 5. 外部 `/tp` 结束会话，日志为 `reason=EXTERNAL_TELEPORT`，不再抢回位置。
 6. 真实 `play` 按 Shift 不会退出镜头（默认策略），玩家保持 `SPECTATOR`。
-7. 任何预览（UI“预览此步”/“预览全部”和 `/camerarail preview`）按 Shift 会结束预览；UI 预览结束后回到原来的编辑器界面。
+7. 任何预览（UI“预览此步”/“预览全部”和 `/camerarail edit <轨道> preview`）按 Shift 会结束预览，预览中再次执行 `preview` 或任意层级 `stop` 也会停止；UI 预览结束后回到原来的编辑器界面。
 8. 在镜头中退出，恢复文件保留；重连后回到播放前的位置并收到恢复消息。
 9. `/camerarail reload` 能重新读取编辑后的 `tracks.yml`。
 10. 游戏内编辑：创建、追加、修改目标/时长/摇摆、wait/effect/title、预览、自动保存、重载。
@@ -83,7 +83,7 @@ java -jar paper-26.1.2-74.jar nogui
 7. 临时移走 PacketEvents jar，重启后应只打印回退日志，所有轨道仍能播放；此时 `blindness`/`slowness` 应回到无画面状态，盔甲架应重新通过 `showEntity` 出现在客户端。
 8. Folia 下重复第 1、5 项，重点看玩家与盔甲架跨 region 时是否出现线程异常或假玩家位置滞后。
 9. 跨版本链路（客户端 26.2/26.3 经 ViaVersion 连接 26.1.2）单独测一遍 FOV：假玩家是客户端侧实体，链路可能不转发其属性包；目标环境应使用 26.1.2 原生客户端验收。
-10. 移除 PacketEvents 后重启，确认启动 WARN、GUI 回退状态、`/camerarail edit effect add` 的聊天栏提示，以及 `/camerarail play` 时只对相关轨道提示；纯 `nausea` 轨道不应触发这些提示。
+10. 移除 PacketEvents 后重启，确认启动 WARN、GUI 回退状态、`/camerarail edit <轨道> add effect` 的聊天栏提示，以及 `/camerarail play` 时只对相关轨道提示；纯 `nausea` 轨道不应触发这些提示。
 11. Folia 远距离 `cut`（跨 region）后：播放中按 Shift 仍应被锁定（出现一次锁定提示）；预览中按 Shift 仍应结束预览。无 Shift 的服务端释放分支不会被误判为 Shift——假玩家镜头下日志只出现 `Server released the spectator camera ... without a Shift input`，不会出现锁定提示，也不会结束预览；盔甲架回退模式不产生该事件，行为同上。
 
 ## 如何判断客户端真的附身了
@@ -111,7 +111,7 @@ java -jar paper-26.1.2-74.jar nogui
 - 旁观者传送拦截：至少两名玩家在线时，镜头锁定后按数字键 1-9 或使用旁观菜单传送到另一名玩家：会话不应结束（不出现 `EXTERNAL_TELEPORT`），动作栏出现锁定提示（默认 `camera.locked`：“过场动画中无法离开镜头。”，可在 `messages.yml` 修改），镜头被重新锁定；`/tp` 等其他原因的外部传送仍会结束会话。
 - 用 `/camerarail advance <signal>` 推进 wait。
 - 等待超时是否按 `exit-mode` 落点。
-- 真实 `play` 中按 Shift 不会脱离（默认）；`/camerarail preview` 和编辑器预览中按 Shift 应结束预览，UI 预览回到原编辑器界面。
+- 真实 `play` 中按 Shift 不会脱离（默认）；`/camerarail edit <轨道> preview` 和编辑器预览中按 Shift 应结束预览（`preview` 是开关，再执行一次同样停止），UI 预览回到原编辑器界面。
 - 镜头中让其他插件或 `/tp` 传送自己。
 - 镜头中退出并重连。
 - 镜头中 `/stop`；确认客户端镜头在 1 tick 内回到玩家自身，假玩家实体和 tab 条目消失。
@@ -122,22 +122,33 @@ java -jar paper-26.1.2-74.jar nogui
 - 播放一条 `exit-mode: animation-end` 的轨道，结束后**立刻按住 W 走 2 秒**：不应出现“前进一下就被瞬间拉回”的循环（旧版本在部分原版客户端上会出现，只有跳跃能解除）；退出点脚底应位于方块表面之上约 0.0001 格。`debug: true` 时控制台会多一行 `Camera exit: track=... destination=... body-before=... body-after=... teleported=... resynced=...`，可核对两次传送与落点。
 - 在编辑器里对某个 `move` 步骤点“传送到此”：玩家应到达目标点且能立刻正常行走；该路径同样会做脚底校正，并在 1 tick 后重同步一次传送。
 - 默认 `animation-end` 可能停在半空；需要安全落点时选择 `pre-entry` 或配置自定义 `exit`，不要依赖插件替你防摔。
-- `/camerarail help` 与 `/camerarail edit help`：分组、对齐、不换行；点击命令填入聊天栏；悬停显示用法；`/camerarail help play` 等详情页包含用法、参数、权限和相关命令。
+- `/camerarail help`、`/camerarail help edit` 与 `/camerarail edit`（无参数）：分组、对齐、不换行；点击命令填入聊天栏；悬停显示用法；`/camerarail help play` 等详情页包含用法、参数、权限和相关命令。
 - 用只有 `camerarail.command`（或再给 `play`）的账号执行 `/camerarail help`，确认看不到无权限的子命令，补全同样只出现可用命令。
 
 ## Dialog 编辑器检查清单
 
-- `/camerarail edit` 打开轨道列表；选择已有轨道、创建新轨道、分页与刷新正常。
-- 关窗飞行后再 `/camerarail edit`，回到上次的轨道概览/步骤页/步骤表单和页码，而不是总回轨道概览。
+- `/camerarail editor` 打开轨道列表；`/camerarail editor <轨道>` 直接打开该轨道；选择已有轨道、以当前视角新建轨道、分页与刷新正常。
+- Dialog 会话占用轨道时，`/camerarail edit <轨道> <动作>` 被拒绝并提示；`/camerarail editor close` 后同一命令可执行。
+- `/camerarail edit` 不带参数列出动作；`/camerarail help edit`、`/camerarail help edit <动作>` 正常；`edit` 后面第一个参数始终按轨道 id 解析（名为 `help`/`tools` 的轨道也能直接编辑，无需转义）。
+- 轨道层：`display`/`description`/`start`（含 `start x y z [yaw pitch]` 显式坐标）/`exit`/`exit-mode`/`sway`/`follow`/`entry`/`list`/`add`/`preview`/`stop`/`undo`/`save` 都按 Dialog 的轨道设置语义工作；`preview` 是开关（再执行一次即停止），`stop` 在轨道/步骤/路径点层都能停止预览；`entry add darkness 0 100`、`entry set 1 darkness 1 200`、`entry remove 1` 后 Dialog 的入场效果列表同步变化。
+- 步骤层类型隔离：`title` 步骤只接受 `title`/`subtitle`/`fade`，输入 `duration` 应提示该步骤可用动作；`wait` 接受 `signal`/`timeout`/`sway`；`effect` 接受 `effect add|remove <效果> [等级] [时长]`；`move` 接受 `here`/`pos`/`duration`/`easing`/`sway`；`cut` 接受 `here`/`pos`/`duration`/`sway`（没有缓动）；`path` 接受 `duration`/`easing`/`sway`/`point list|add`；结构动作 `remove`/`duplicate`/`up`/`down`/`preview`/`stop` 每种类型都可用。
+- `add <类型>` 七种类型都能追加：`move`/`path`/`hold`/`wait`/`cut`/`effect`/`title`；省略参数时得到与 Dialog“添加步骤”相同的默认值，追加提示里给出 `<轨道>:<序号>` 和继续编辑的入口。便捷写法：`add move|path|hold [时长]`、`add cut [停留]`、`add wait [信号] [超时]`（省略信号自动生成唯一名 `wait`/`wait2`…）、`add effect [add|remove] [效果] [等级] [时长]`（省略动作视为 add，可直接 `add effect blindness`）、`add title [标题[|副标题]]` 或 `add title <淡入> <停留> <淡出> <标题>[|<副标题>]`。追加后用步骤层字段修改，顺序用 `up`/`down` 调整。
+- 路径点层：`here`、`pos x y z [yaw pitch]`、`remove`、`up`、`down`、`insert` 均可用；`stop` 用于结束预览；与相邻点重合的追加/插入会被拒绝，路径点至少保留一个。
+- Tab 补全：`edit` 第一参数精确命中轨道 id 时同时补 `id:`（可继续补步骤号、路径点号）；`advance` 额外补 `*`；目标不存在（轨道/步骤不存在、步骤不是路径、路径点越界）时不补全；`editor` 补轨道 id 与 `close`；`help edit` 补动作和字段主题；其余按目标层级补动作/类型/效果/信号。
+- 帮助：`/camerarail help edit` 按轨道设置/入场/步骤/各步骤类型/路径点/预览/保存分组；`description [说明]`、`title`/`subtitle [文本]` 的方括号表示可省略；`help edit title` 列出两种 `add title` 形式；`help edit here`/`pos` 归入「步骤/路径点」分组；`help edit duration`/`easing`/`signal`/`timeout`/`subtitle`/`fade` 各有详情页但 overview 不新增这些行；`help edit add` 说明七种类型。
+- 可点击动作：`/camerarail edit login:2`（不带动作）、写错动作以及 `edit login list` 的头部，动作都以可点击片段列出，点击填入 `/camerarail edit login:2 <动作> `，行尾有「详情见 `/camerarail help edit <动作>`」；每行不超过聊天栏宽度，必要时自动换行。
+- 两行 track 状态：`/camerarail edit login` 的摘要分成「步骤与预览」「轨道设置」两行可点击动作；编辑视图没有 `/play` 链接；`/camerarail info login` 仍保留播放/预览入口。
+- 成功提示带目标：轨道级（display/description/exit-mode/sway 含周期/follow）回显轨道 id；步骤级（duration/easing/sway/signal/timeout/title/subtitle/fade/effect）回显 `<轨道:步骤>`。
+- 关窗飞行后再 `/camerarail editor`，回到上次的轨道概览/步骤页/步骤表单和页码，而不是总回轨道概览。
 - 轨道概览的步骤数、总时长、摇摆、跟随与实际 YAML 一致。
 - 添加 7 种步骤；每种表单的默认值合理，保存后步骤列表和 `tracks.yml` 同步更新。
 - 步骤表单标题带序号；保存后可在原表单继续改，“保存并返回”回步骤列表。
 - “保存”只提交编辑框里的数值；预览、上一步/下一步、上移/下移、复制会先保存编辑框里的输入再执行：上一步/下一步成功后在新表单顶部提示“已保存刚才的修改.”，上移/下移/复制显示各自的“已移动步骤./已复制步骤.”。无效输入会留在原表单并提示错误，此时 Esc/“保存并关闭”也关不掉，需要先修正或点“取消”。窗口底部的“保存并关闭”按钮和 Esc 也会先保存再关闭（有效输入已写入，重新打开表单能看到；新建步骤/入场效果的“关闭”仍是取消，不会创建）；只有“取消”和“删除”会明确丢弃未保存的输入。列表/选择器点“返回”只导航，不丢当前输入；信号/效果选择器的底栏返回与 Esc 会带着已选值回到原表单。
-- 坐标表单点“传送到此”后窗口关闭、人物到保存位置、朝向正确；“传送到此”会先保存编辑框里的坐标；起点/步骤/路径点按眼睛换算脚部，退出点按脚部直接传送；`/camerarail edit` 回到原表单。
+- 坐标表单点“传送到此”后窗口关闭、人物到保存位置、朝向正确；“传送到此”会先保存编辑框里的坐标；起点/步骤/路径点按眼睛换算脚部，退出点按脚部直接传送；`/camerarail editor` 回到原表单。
 - 移动/硬切表单改坐标、时长、缓动、摇摆；硬切表单另有“硬切后停留”时长（tick，`0` = 瞬时）且没有缓动；保存后步骤列表的类型名仍是 `硬切 (cut)`，停留非 0 时显示如 `硬切 40t · 0.0s`、悬停提示包含 `停留: 40t`；点“取当前视角”立即捕获点击时的视角、马上保存为这一步的目标并重开表单（表单同步显示新坐标和“已保存步骤.”），没有倒计时。播放时硬切在两种镜头模式下都是客户端单帧切换；停留为 `0` 时下一步同一 tick 立刻开始，停留非 0 时在新姿态保持对应 tick 数后继续。
 - 缓动/摇摆选项显示中文名和行为说明；等待表单的“已有信号 >”列出所有轨道出现过的信号并可回填；效果表单的“常用效果 >”可回填常用 id，自定义 id 仍可用。
 - 路径点列表：追加当前视角、逐点编辑、插入、删除、上移/下移；路径点表单的 `<- 上一步`/`下一步 ->` 可在相邻路径点间切换并会先保存编辑框里的坐标（不改变路径点顺序）；表单里的“取当前视角”立即把点击时的视角写进该路径点并提示“已取当前视角并保存.”，“插入当前视角”会先保存当前点再插入；路径点数量上限生效。
-- 重复点防御：创建 `path` 步骤后**原地**“追加当前视角”（与步骤起点位置差 < 0.01 格，对话框切换期间视角被轻微晃动也算）会被判为与上一个点同位置而拒绝，不会新增重合点；先移动/转动到别的位置再追加，会用真实路径点替换创建时的占位点（点数仍为 1）。与相邻路径点位置相同的插入同样被拒绝；`limits.max-path-points: 1` 时替换占位点仍应成功，只有真正增加点数才会报上限。`/camerarail edit here`（命令路径，对 `path` 是追加点）同样不应写出与起点重合的点。
+- 重复点防御：创建 `path` 步骤后**原地**“追加当前视角”（与步骤起点位置差 < 0.01 格，对话框切换期间视角被轻微晃动也算）会被判为与上一个点同位置而拒绝，不会新增重合点；先移动/转动到别的位置再追加，会用真实路径点替换创建时的占位点（点数仍为 1）。与相邻路径点位置相同的插入同样被拒绝；`limits.max-path-points: 1` 时替换占位点仍应成功，只有真正增加点数才会报上限。`/camerarail edit <轨道>:<步骤> point add`（命令路径）同样不应写出与起点重合的点；对路径步骤执行 `here` 会被拒绝并列出可用动作。
 - 轨道设置：显示名称、说明、摇摆预设/周期/种子、跟随；自定义摇摆振幅不会被意外覆盖（选择 `custom`）。
 - 用一条最后一点用“取当前视角”保存的轨道播放；第三人称确认 gm3 相机在盔甲架眼高而不是底部，结束后玩家视角不应从脚部升到头部。
 - 退出点：默认“动画结束位置”，也可选“进入前的位置”或“自定义位置”；只有自定义才填脚部坐标。默认模式最终 x/z/yaw/pitch 应与保存点一致（不使用含 sway 的最后一帧），结束瞬间玩家身体应停在镜头最后位置，不应先回到旧身体位置再传送。
@@ -146,7 +157,11 @@ java -jar paper-26.1.2-74.jar nogui
 - 步骤上移/下移/复制/删除、撤销；删除全部步骤后列表不崩。
 - “预览此步”只播放选中的这一步，播到该步骤结束就停；之前的效果/标题不回放，从第 2 步起也不施加入场效果；预览结束回到原步骤表单，而不是步骤列表。
 - 从步骤列表/轨道概览启动的预览，结束后分别回到步骤列表/轨道概览；停止预览后能回到编辑器。
-- 两个管理员同时编辑同一轨道时，第二个被拒绝且提示清楚。
+- 并发编辑不丢改动：两名玩家（或两个 Folia region 线程）同时用命令改同一轨道的不同字段，两条修改都保留；Dialog 会话占用轨道时命令被拒绝，`/camerarail editor close` 后命令可写入，再次打开 Dialog 能看到这次写入。
+- 撤销过期被拒：A 用命令修改轨道后，B（命令或 Dialog）再改同一轨道，A 执行 `/camerarail edit <轨道> undo` 被拒绝并提示“轨道在撤销后被修改过，无法撤销.”，B 的改动保留。
+- 删除后撤销：删除轨道后再执行 undo 提示“找不到轨道 <id>.”（轨道已不存在、该轨道的历史也被清掉），不会恢复已删除的轨道；用同名 id 新建轨道后 undo 提示“没有可以撤销的修改.”，旧记录不会套用。
+- reload 与撤销历史：命令修改后执行 `/camerarail reload`，再 undo 提示没有记录（历史是内存态）；`tracks.yml` 整个文件无法解析（fatal）时 reload 失败、内存轨道与撤销历史都保留；只是个别轨道解析失败时其余轨道仍会重载、历史清空，但 reload 仍返回 -1/提示失败（详见控制台）。
+- Dialog 会话期间 reload：有会话时 `/camerarail reload` 被拒绝；同一状态下插件 API `CameraService.reload()` 返回 `-1`，草稿和内存轨道都不变（可用测试插件或控制台确认）。
 - Paper 控制台没有 `showDialog`/Dialog 序列化异常；Folia 下 UI 操作都在玩家调度器上执行。
 - 保存失败（例如 `tracks.yml` 有无法解析的段落）时，编辑器显示保存失败，且不会覆盖手写段落。
 

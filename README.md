@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/Paper-26.1.2-3d7cc9" alt="Paper 26.1.2">
   <img src="https://img.shields.io/badge/Folia-26.1.2-4caf50" alt="Folia 26.1.2">
   <img src="https://img.shields.io/badge/Java-25-f89820" alt="Java 25">
-  <img src="https://img.shields.io/badge/version-1.1.0-6f42c1" alt="Version 1.1.0">
+  <img src="https://img.shields.io/badge/version-1.1.1-6f42c1" alt="Version 1.1.1">
   <img src="https://img.shields.io/badge/license-MIT-97ca00" alt="License MIT">
 </p>
 
@@ -14,7 +14,7 @@
 
 CameraRail 是一个面向 **Paper / Folia** 的镜头轨道与过场动画插件。
 
-播放开始时，玩家会被切换为旁观者并锁定镜头；镜头沿 `tracks.yml` 中编排的轨道移动、停留或等待外部信号，播放结束后玩家按配置的落点回到地面。轨道可以手写 YAML，也可以完全在游戏内的图形编辑器中录制和调整。
+播放开始时，玩家会被切换为旁观者并锁定镜头；镜头沿 `tracks.yml` 中编排的轨道移动、停留或等待外部信号，播放结束后玩家按配置的落点回到地面。轨道可以手写 YAML，也可以完全在游戏内的图形编辑器或编辑物品工具中录制和调整。
 
 插件只负责镜头本身。登录验证、小游戏流程、正式传送和流程状态切换仍由你现有的插件负责，它们可以通过 `CameraService`、事件或 `/camerarail` 命令与镜头配合，详见 [插件集成](docs/integration.md)。
 
@@ -25,7 +25,7 @@ CameraRail 是一个面向 **Paper / Folia** 的镜头轨道与过场动画插�
 - **镜头摇摆**：`off`、`gentle`、`natural`、`strong` 四档预设，也可自定义振幅与周期
 - **外部信号**：`wait` 步骤可等待登录完成、倒计时等信号，支持信号提前到达与超时
 - **三种退出落点**：镜头最后位置、进入前位置或自定义位置
-- **游戏内编辑器**：基于 Paper Dialog 的全屏编辑器，另有命令编辑器；修改即时保存，支持撤销
+- **游戏内编辑器**：基于 Paper Dialog 的全屏编辑器，另有独立的无状态编辑命令与可获取的取景/预览物品工具；修改即时保存，支持撤销
 - **镜头效果**：药水效果、标题与副标题、入场效果；安装 PacketEvents 后支持 FOV、失明雾与夜视雾
 - **定位条隐藏**：播放期间隐藏被拍摄玩家的原版定位条（locator bar），正常或异常结束都会恢复
 - **崩溃恢复**：玩家退出或服务器崩溃后，下次登录恢复播放前的状态
@@ -45,10 +45,10 @@ PacketEvents 用于增强镜头画面，不是必需依赖，插件也不会打�
 
 ## 安装
 
-1. 下载 `CameraRail-1.1.0.jar`，放入服务端的 `plugins/` 目录。
+1. 下载 `CameraRail-1.1.1.jar`，放入服务端的 `plugins/` 目录。
 2. （可选）把 PacketEvents 2.14.0+ 放入同一目录，以获得完整的 FOV 与雾效。
 3. 启动服务器，插件会自动生成默认配置与示例轨道。
-4. 编辑 `plugins/CameraRail/tracks.yml`，或进入游戏执行 `/camerarail edit`。
+4. 编辑 `plugins/CameraRail/tracks.yml`，或进入游戏执行 `/camerarail editor`（图形编辑器）或 `/camerarail tools`（编辑工具）。
 5. 执行 `/camerarail reload`，然后用 `/camerarail play <轨道>` 预览。
 
 首次启动会生成配置和轨道文件，`recovery/` 会在第一次播放时创建：
@@ -121,34 +121,59 @@ tracks:
 | `/camerarail advance <信号或*> [玩家]` | 推进等待步骤；`*` 表示当前等待步骤 |
 | `/camerarail create <id> [名称]` | 以当前位置和视角创建轨道 |
 | `/camerarail delete <id> confirm` | 删除轨道 |
-| `/camerarail edit` | 打开图形编辑器 |
-| `/camerarail edit help [命令]` | 查看编辑器命令 |
+| `/camerarail editor [<轨道>]` 或 `editor close` | 打开 Dialog 图形编辑器；带轨道 id 直接打开该轨道；`close` 关闭编辑会话并释放轨道 |
+| `/camerarail tools` | 打开编辑工具箱子 |
+| `/camerarail help edit [动作或字段]` | 查看编辑命令的动作、字段、用法与权限；字段主题有 duration/easing/signal/timeout/subtitle/fade |
+| `/camerarail edit <目标> <动作> [参数]` | 无状态编辑命令；第一个参数固定是目标 `轨道`、`轨道:步骤` 或 `轨道:步骤:路径点` |
 | `/camerarail reload` | 重载配置、消息和轨道 |
 
-控制台执行 `play`、`stop`、`advance` 时必须提供玩家名。有人处于编辑器时，`/camerarail reload` 会被拒绝，避免覆盖未完成的草稿。
+控制台执行 `play`、`stop`、`advance` 时必须提供玩家名。有人处于编辑器时，`/camerarail reload` 会被拒绝，避免覆盖未完成的草稿；API 的 `CameraService.reload()` 走同一守卫，此时返回 `-1`。
 
-命令编辑器常用命令：
+编辑命令按 Dialog 的层级组织：目标是命令的第一个固定参数，写作 `<轨道>[:<步骤>[:<路径点>]]`，步骤与路径点编号从 1 开始。第一个参数位置永远按目标解析，所以轨道 id 不需要转义前缀。
+
+- **轨道层** `<轨道>`：轨道整体的设置与集合——`display`、`description`、`start`、`exit`、`exit-mode`、`sway`、`follow`；`entry` 管理入场效果；`list` 列出步骤；`add <类型>` 追加步骤；以及 `preview`、`stop`、`undo`、`save`。`preview` 是开关（预览中再次执行即停止），`stop` 在轨道、步骤、路径点三层都能停止预览。
+- **步骤层** `<轨道>:<步骤>`：字段由步骤类型决定，与 Dialog 的步骤表单一致。`move` 用 `here`、`pos`、`duration`、`easing`、`sway`；`cut` 用 `here`、`pos`、`duration`、`sway`（硬切没有缓动）；`path` 用 `duration`、`easing`、`sway`、`point`；`hold` 用 `duration`、`sway`；`wait` 用 `signal`、`timeout`、`sway`；`effect` 用 `effect <add|remove> <效果> [等级] [时长]`；`title` 用 `title`、`subtitle`、`fade`。所有步骤还支持 `remove`、`duplicate`、`up`、`down`、`preview`、`stop`。
+- **路径点层** `<轨道>:<步骤>:<路径点>`：`here`、`pos`、`remove`、`up`、`down`、`insert`，以及用于结束预览的 `stop`。
+
+动作写错层级或步骤类型时会把该目标可用的动作列出来：每个动作都是可点击的片段，点击即填入 `/camerarail edit <目标> <动作> `，行尾还有「详情见 `/camerarail help edit <动作>`」。不写动作时显示目标摘要；`edit <轨道>` 的摘要分成「步骤与预览」「轨道设置」两行可点击动作（编辑视图不提供 `/play` 链接，`/camerarail info <id>` 仍带播放入口）；`list` 的头部也给出 `add`/`preview` 两个可点击动作；`/camerarail edit` 不带参数时列出全部动作。
+
+Tab 补全：`edit` 第一参数输入完整轨道 id 时会同时给出 `id:`，接着可补步骤号与路径点号；`advance` 补全信号并额外提供 `*`；目标不存在（轨道或步骤不存在、步骤不是路径、路径点越界）时不补全；`editor` 补全轨道 id 与 `close`；`help edit` 补全动作与字段主题。
+
+成功提示会带目标：轨道级（`display`、`description`、`exit-mode`、`sway`、`follow` 等）回显轨道 id，步骤级（`duration`、`easing`、`sway`、`signal`、`timeout`、`title`、`subtitle`、`fade`、`effect` 等）回显 `<轨道:步骤>`。帮助里 `description [说明]`、`title`/`subtitle [文本]` 的方括号表示可省略（省略即清除）；`add title` 的三数字形式与 `add title <标题[|副标题]>` 便捷形式并存；`here`/`pos` 在帮助里归入「步骤/路径点」分组。
+
+`add <类型>` 也接受便捷写法：`add move|path|hold [时长]`、`add cut [停留]`、`add wait [信号] [超时]`（省略信号自动生成唯一名 `wait`/`wait2`…）、`add effect [效果]`（省略动作即 add）、`add title [标题[|副标题]]` 或 `add title <淡入> <停留> <淡出> <标题>[|<副标题>]`。
+
+编辑命令和 Dialog 编辑器是两套独立的编辑入口：命令直接写 `tracks.yml`，Dialog 编辑器维护自己的会话草稿。Dialog 会话占用的轨道不能被编辑命令修改，需先 `/camerarail editor close` 释放。两套实现互不依赖：无状态编辑命令的重构不会改变 Dialog 的存储与界面，Dialog 编辑器的调整也不会改变命令的写入路径。
 
 ```text
-/camerarail edit create login 登录过场
-/camerarail edit add 100                # 追加移动步骤（当前视角）
-/camerarail edit path                   # 追加路径步骤
-/camerarail edit point                  # 追加路径点
-/camerarail edit hold 40                # 追加停留
-/camerarail edit cut 40                 # 追加快切并停留 40t
-/camerarail edit wait login:ready       # 追加等待
-/camerarail edit effect add darkness
-/camerarail edit title 20 60 20 欢迎|正在同步
-/camerarail edit select 3               # 选中步骤
-/camerarail edit start                  # 起点设为当前视角
-/camerarail edit exit                   # 自定义退出点（当前脚下位置）
-/camerarail edit exit-mode pre-entry
-/camerarail edit preview
-/camerarail edit undo
-/camerarail edit done
+/camerarail edit login display 登录过场           # 轨道显示名称
+/camerarail edit login start                      # 起点取当前视角
+/camerarail edit login start 0 100 0 0 10         # 起点显式坐标
+/camerarail edit login sway natural 20            # 轨道默认摇摆与周期
+/camerarail edit login entry add darkness 0 100   # 入场效果
+/camerarail edit login add path                   # 追加路径步骤（七种类型；move/path/hold 可带时长）
+/camerarail edit login add move 120               # 追加移动步骤，时长 120 tick
+/camerarail edit login add wait login:done 6000   # 追加等待步骤；省略信号自动生成 wait/wait2…
+/camerarail edit login add effect blindness       # 追加效果步骤；省略动作就是 add
+/camerarail edit login add title 欢迎|同步中      # 追加标题步骤（主标题|副标题，使用默认时间）
+/camerarail edit login:4 point add                # 路径步骤追加当前视角
+/camerarail edit login:4:2 here                   # 用当前视角替换第 4 步第 2 个路径点
+/camerarail edit login:4:2 remove                 # 删除该路径点
+/camerarail edit login:2 duration 120             # 步骤时长
+/camerarail edit login:2 easing ease-in-out       # 步骤缓动
+/camerarail edit login:3 sway gentle              # 步骤摇摆
+/camerarail edit login:5 title 欢迎回来           # title 步骤的主标题
+/camerarail edit login:5 subtitle 正在同步        # 副标题
+/camerarail edit login:5 fade 20 60 20            # 淡入/停留/淡出
+/camerarail edit login:6 remove                   # 删除第 6 步
+/camerarail edit login:3 preview                  # 从第 3 步开始预览；再执行一次即停止
+/camerarail edit login:3 stop                     # 轨道/步骤/路径点任意层级都能停止预览
+/camerarail edit login undo                       # 撤销这条轨道最近一次修改
 ```
 
-每次修改都会异步写入 `tracks.yml`，`/camerarail edit undo` 可撤销最近 30 次修改。完整命令列表和参数见 `/camerarail edit help`。
+成功后会回显目标，例如 `edit login:2 duration 120` 提示「步骤 login:2 时长已设为 120t.」，`edit login sway natural 20` 提示「轨道 login 默认摇摆已设为 natural（周期 20t）.」。
+
+每次修改都会异步写入 `tracks.yml`；`/camerarail edit <轨道> undo` 撤销该轨道最近一次修改（每个玩家最多 30 条记录）。撤销前会和仓库当前值比对：如果这条轨道在那之后被其他玩家、Dialog 编辑器、`reload` 或手改 `tracks.yml` 改动过，撤销会被拒绝并提示「轨道在撤销后被修改过，无法撤销.」，不会覆盖别人的修改。撤销历史只存在内存里：`reload` 只要没有致命读取错误就会清空（含个别轨道解析失败、其余仍重载的情况），玩家退出也会清空。
 
 ## 权限
 
@@ -158,11 +183,13 @@ tracks:
 | `camerarail.play` | OP | 播放轨道 |
 | `camerarail.stop` | OP | 停止播放 |
 | `camerarail.advance` | OP | 发送等待信号 |
-| `camerarail.edit` | OP | 使用游戏内编辑器 |
+| `camerarail.edit` | OP | 使用游戏内编辑器与编辑工具（获取及使用） |
 | `camerarail.manage` | OP | 创建和删除轨道（同时需要 `camerarail.edit`） |
 | `camerarail.reload` | OP | 重载配置和轨道 |
 
 `camerarail.command` 只允许执行根命令，不会自动包含其他子权限。只需要播放和查看的场景，可以只授予 `camerarail.command` 与 `camerarail.play`，不要授予 `edit`、`manage` 或 `reload`。
+
+`camerarail.edit` 同时控制 Dialog 编辑器、无状态编辑命令，以及编辑工具的获取与使用（`/camerarail tools`）。
 
 被播放的玩家不需要拥有权限；播放由有 `camerarail.play` 权限的命令发送者或插件发起。
 
@@ -242,7 +269,9 @@ tracks:
 
 ## 游戏内编辑器
 
-`/camerarail edit`（或 `/camerarail edit gui`）打开 Paper 的 Dialog 全屏编辑器，不需要额外依赖或客户端 mod。
+游戏内编辑有三种入口：Dialog 图形编辑器、无状态命令编辑器（见“命令”一节），以及可获取的编辑物品工具。
+
+`/camerarail editor` 打开 Paper 的 Dialog 全屏编辑器，不需要额外依赖或客户端 mod；`/camerarail editor <轨道>` 直接打开该轨道，`/camerarail editor close` 关闭编辑会话并释放轨道。
 
 - 轨道列表：选择已有轨道，或以当前视角新建轨道。
 - 轨道概览：查看步骤、总时长和摇摆；编辑轨道设置、起点、退出点、入场效果；预览整条轨道。
@@ -252,9 +281,19 @@ tracks:
 - 硬切步骤表单在目标姿态之外提供“硬切后停留”时长（tick，`0` 表示纯瞬时）。
 - 路径步骤有独立的路径点列表，可追加当前视角、插入、删除和上下移动；路径点表单的“取当前视角”会立即保存该点，“插入当前视角”会先保存当前点再插入。
 - 等待步骤可以复用已有信号；效果步骤提供常用效果列表，也允许输入任意注册 id。
-- 表单里的“保存”只提交编辑框里的数值（步骤/路径点表单留在原表单；轨道设置、入场效果、起点/退出点保存后回到上一层）；预览、上一步/下一步、上移/下移、复制、传送到此等按钮会先保存编辑框再执行，窗口底部的“保存并关闭”和 Esc 也会先保存再关闭。只有“取消”和“删除”会丢弃未保存的输入；新建步骤/入场效果/轨道的“关闭”仍是取消，不会创建。所有修改立即自动保存，可撤销最近 30 次；按 Esc 关闭后再执行 `/camerarail edit` 会回到上次的界面和页码。
+- 表单里的“保存”只提交编辑框里的数值（步骤/路径点表单留在原表单；轨道设置、入场效果、起点/退出点保存后回到上一层）；预览、上一步/下一步、上移/下移、复制、传送到此等按钮会先保存编辑框再执行，窗口底部的“保存并关闭”和 Esc 也会先保存再关闭。只有“取消”和“删除”会丢弃未保存的输入；新建步骤/入场效果/轨道的“关闭”仍是取消，不会创建。所有修改立即自动保存，可撤销最近 30 次；按 Esc 关闭后再执行 `/camerarail editor` 会回到上次的界面和页码。
 
-对话框依赖 Paper 26.1.2 的 Dialog API。命令编辑器不依赖 Dialog，始终可用，适合快速追加步骤或微调参数。
+对话框依赖 Paper 26.1.2 的 Dialog API；无状态编辑命令与编辑工具不依赖 Dialog，始终可用。Dialog 会话占用的轨道会拒绝编辑命令，关闭会话后即可用命令修改。
+
+### 编辑工具
+
+`/camerarail tools` 打开编辑工具箱子，也可以在 Dialog 编辑器的轨道列表或轨道概览点“编辑工具”按钮。获取和使用都需要 `camerarail.edit` 权限。
+
+- **取景工具**（木棒）：Shift+右键打开选择器，选择一条轨道的起点、退出点或某个路径步骤；选中后只要拿着工具，ActionBar 会持续显示当前目标。右键把当前眼睛视角写入目标，路径步骤会追加一个路径点。重复的路径点、路径点达到上限、不在轨道世界、预览中等情况只在 ActionBar 提示，不刷聊天栏。
+- **预览工具**（末影之眼）：Shift+右键选择轨道与步骤；右键从该步骤开始预览，预览中按 Shift 退出预览（预览退出后回到原位置）。
+- 箱子里的“图形编辑器”直接打开 Dialog 编辑器；“移除编辑工具”从背包移除本插件的工具。
+
+工具的选择状态只在本次在线期间保留，重新登录后需要重新选择目标（工具物品本身可以留在背包）。Dialog 编辑器仍是完整功能的入口，物品工具只负责“边走边取点”这类高频操作。
 
 ## 开发者 API
 
@@ -284,7 +323,7 @@ boolean advance(Player player);
 int reload();
 ```
 
-`play` 返回 `true` 只表示请求已受理，不保证第一帧已经渲染；实际结束以 `CameraTrackEndEvent` 为准。播放相关方法可以从任意线程调用，`reload()` 请在服务端线程执行。
+`play` 返回 `true` 只表示请求已受理，不保证第一帧已经渲染；实际结束以 `CameraTrackEndEvent` 为准。播放相关方法可以从任意线程调用，`reload()` 请在服务端线程执行：返回加载的轨道数；`-1` 表示被拒绝（有 Dialog 编辑会话未关闭，此时内存轨道与撤销历史都不变）或 `tracks.yml` 读取出错（整个文件无法读取时同样保持原轨道；只是个别轨道解析失败时其余轨道仍会重载、失败轨道保留上一版本，详见控制台）。
 
 事件：
 
@@ -354,7 +393,7 @@ int reload();
 mvn package
 ```
 
-产物为 `target/CameraRail-1.1.0.jar`。运行 `mvn test` 可执行单元测试。
+产物为 `target/CameraRail-1.1.1.jar`。运行 `mvn test` 可执行单元测试。
 
 ## 反馈
 

@@ -1,5 +1,11 @@
 package red.ria.camerarail.model;
 
+import org.bukkit.NamespacedKey;
+import org.bukkit.Registry;
+import org.bukkit.potion.PotionEffectType;
+
+import java.util.Locale;
+
 /**
  * Effects whose camera-facing rendering depends on the fake-player camera.
  *
@@ -10,6 +16,28 @@ package red.ria.camerarail.model;
  */
 public final class CameraEffects {
     private CameraEffects() {
+    }
+
+    /**
+     * Resolves a user/command effect id (short name or namespaced key) to a registered effect.
+     * Returns {@code null} when the effect is unknown.
+     */
+    public static PotionEffectType resolveEffect(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        String normalized = raw.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
+        normalized = switch (normalized) {
+            case "slow" -> "slowness";
+            case "blind" -> "blindness";
+            case "nv" -> "night_vision";
+            default -> normalized;
+        };
+        if (!normalized.contains(":")) {
+            normalized = "minecraft:" + normalized;
+        }
+        NamespacedKey key = NamespacedKey.fromString(normalized);
+        return key == null ? null : Registry.EFFECT.get(key);
     }
 
     /** Whether this effect needs a player camera entity to render as designed. */
