@@ -388,29 +388,44 @@ public final class EditorUI implements Listener {
         if (swaySelected == null) {
             swaySelected = "custom";
         }
+        Map<String, String> defaults = new LinkedHashMap<>();
+        defaults.put("display", track.displayName());
+        defaults.put("description", track.description());
+        defaults.put("sway", swaySelected);
+        defaults.put("period", String.valueOf(sway.period()));
+        defaults.put("seed", String.valueOf(sway.seed()));
+        defaults.put("follow", String.valueOf(track.follow()));
+        Map<String, String> shown = merge(defaults, values);
         List<DialogInput> inputs = List.of(
-                textInput("display", "显示名称", value(values, "display", track.displayName()), 64),
-                multilineInput("description", "说明", value(values, "description", track.description()), 512),
-                singleOption("sway", "默认摇摆", trackSwayEntries(swaySelected)),
-                textInput("period", "摇摆周期 (tick)", value(values, "period", String.valueOf(sway.period())), 16),
-                textInput("seed", "摇摆种子", value(values, "seed", String.valueOf(sway.seed())), 32),
-                DialogInput.bool("follow", text("跟随区块加载", NamedTextColor.GRAY), track.follow(), "true", "false")
+                textInput("display", "显示名称", value(shown, "display", track.displayName()), 64),
+                multilineInput("description", "说明", value(shown, "description", track.description()), 512),
+                singleOption("sway", "默认摇摆", trackSwayEntries(value(shown, "sway", swaySelected))),
+                textInput("period", "摇摆周期 (tick)", value(shown, "period", String.valueOf(sway.period())), 16),
+                textInput("seed", "摇摆种子", value(shown, "seed", String.valueOf(sway.seed())), 32),
+                DialogInput.bool("follow", text("跟随区块加载", NamedTextColor.GRAY),
+                        Boolean.parseBoolean(value(shown, "follow", String.valueOf(track.follow()))),
+                        "true", "false")
         );
         List<ActionButton> buttons = new ArrayList<>();
-        buttons.add(formButton("保存", "保存轨道级设置", BUTTON_WIDTH,
-                response -> readWithBoolean(response, "follow", "display", "description", "sway", "period", "seed"),
-                this::saveTrackSettings));
-        buttons.add(button("取消", "不保存并回到轨道概览", p -> showTrack(p, null)));
+        Function<DialogResponseView, Map<String, String>> reader =
+                response -> readWithBoolean(response, "follow", "display", "description", "sway", "period", "seed");
+        PendingSave save = (p, raw) -> untouched(raw, shown, values != null)
+                ? SaveOutcome.UNCHANGED : applyTrackSettings(p, raw);
+        buttons.add(formButton("保存", "保存上方编辑框中的设置", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save,
+                        q -> showTrack(q, notice("轨道设置已保存.", false)))));
+        buttons.add(button("取消", "放弃上方未保存的输入并回到轨道概览", p -> showTrack(p, null)));
         show(player, dialog(text("轨道设置 · " + track.id(), NamedTextColor.WHITE),
                 body(notice, text("世界 " + track.worldName() + " · 单位 tick · custom 保留当前振幅",
-                        NamedTextColor.GRAY)), inputs, buttons, 1));
+                        NamedTextColor.GRAY)), inputs, buttons, 1,
+                saveAndCloseButton(shown, "保存上方设置并关闭窗口（Esc 同效）", reader, save)));
     }
 
-    private void saveTrackSettings(Player player, Map<String, String> raw) {
+    private SaveOutcome applyTrackSettings(Player player, Map<String, String> raw) {
         EditorSession session = editors.session(player);
         if (session == null) {
             showTrackList(player, 0, null);
-            return;
+            return SaveOutcome.FAILED;
         }
         try {
             String display = value(raw, "display", "").trim();
@@ -426,8 +441,9 @@ public final class EditorUI implements Listener {
             }
             int period = integer(raw, "period", 20, config.get().maxTrackTicks(), "摇摆周期");
             long seed = longValue(raw, "seed", "摇摆种子");
-            String swayRaw = value(raw, "sway", "natural");
             SwaySettings current = session.draft.sway();
+            String storedSway = presetNameOrNull(current);
+            String swayRaw = value(raw, "sway", storedSway == null ? "custom" : storedSway);
             SwaySettings nextSway;
             if ("custom".equals(swayRaw)) {
                 nextSway = new SwaySettings(current.x(), current.y(), current.z(), current.yaw(),
@@ -435,19 +451,25 @@ public final class EditorUI implements Listener {
             } else {
                 nextSway = SwaySettings.ofPreset(parseSway(swayRaw, false), period, seed);
             }
-            boolean follow = Boolean.parseBoolean(value(raw, "follow", "true"));
+            boolean follow = raw.containsKey("follow")
+                    ? Boolean.parseBoolean(raw.get("follow"))
+                    : session.draft.follow();
             CameraTrack updated = session.draft.withDisplayName(display)
                     .withDescription(description)
                     .withSway(nextSway)
                     .withFollow(follow);
+            if (updated.equals(session.draft)) {
+                return SaveOutcome.UNCHANGED;
+            }
             String error = editors.applyDraft(player, updated, session.selected);
             if (error != null) {
                 showTrackSettings(player, raw, notice(error, true));
-                return;
+                return SaveOutcome.FAILED;
             }
-            showTrack(player, notice("轨道设置已保存.", false));
+            return SaveOutcome.SAVED;
         } catch (RuntimeException exception) {
             showTrackSettings(player, raw, notice(message(exception), true));
+            return SaveOutcome.FAILED;
         }
     }
 
@@ -733,47 +755,77 @@ public final class EditorUI implements Listener {
         }
         inputs.add(singleOption("sway", "摇摆", stepSwayEntries(value(values, "sway", swayName(sway)))));
 
+        Map<String, String> shown = moveFields(pose, duration, cut, easing, sway, values);
+        // A new step has nothing stored yet, so it is always written, never skipped as "untouched".
+        boolean staged = values != null || adding;
+        PendingSave save = (p, raw) -> untouched(raw, shown, staged)
+                ? SaveOutcome.UNCHANGED : applyMove(cut, p, index, adding, step, raw);
+
         List<ActionButton> buttons = new ArrayList<>();
         Function<DialogResponseView, Map<String, String>> reader =
                 response -> read(response, "x", "y", "z", "yaw", "pitch", "duration", "easing", "sway");
-        buttons.add(formButton("保存", "保存这一步", BUTTON_WIDTH, reader,
-                (p, raw) -> saveMove(cut, p, index, adding, step, raw, false)));
-        buttons.add(formButton("保存并返回", "保存后回到步骤列表", BUTTON_WIDTH, reader,
-                (p, raw) -> saveMove(cut, p, index, adding, step, raw, true)));
-        buttons.add(button("取当前视角", "关闭窗口并立即把当前视角填入", p -> capturePose(p, false, captured -> {
-            Map<String, String> next = copy(values);
-            putPose(next, captured);
-            showMoveForm(cut, p, index, adding, step, next, notice("已取当前视角.", false));
-        })));
-        buttons.add(button("传送到此", "关闭窗口并传送到已保存的目标位置；/camerarail edit 回来",
-                p -> teleportToPose(p, pose, false)));
-        addEditActions(player, buttons, index, adding);
+        buttons.add(formButton("保存", "保存上方编辑框中的数值", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save,
+                        q -> afterStepSaved(q, index, adding, false))));
+        buttons.add(formButton("保存并返回", "保存上方数值后回到步骤列表", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save,
+                        q -> afterStepSaved(q, index, adding, true))));
+        buttons.add(formButton("取当前视角", "立即把当前视角保存为这一步的目标", BUTTON_WIDTH, reader,
+                (p, raw) -> capturePose(p, false, captured -> {
+                    Map<String, String> next = merge(shown, input(raw));
+                    putPose(next, captured);
+                    if (save.save(p, next) != SaveOutcome.FAILED) {
+                        afterStepSaved(p, index, adding, false);
+                    }
+                }, error -> showMoveForm(cut, p, index, adding, step, merge(shown, input(raw)),
+                        notice(error, true)))));
+        buttons.add(formButton("传送到此", "先保存上方数值，再传送到这一步的目标位置；/camerarail edit 回来",
+                BUTTON_WIDTH, reader, (p, raw) -> {
+                    Map<String, String> input = input(raw);
+                    if (save.save(p, input) == SaveOutcome.FAILED) {
+                        return;
+                    }
+                    teleportToPose(p, parsePose(input), false);
+                }));
+        addEditActions(player, buttons, index, adding, reader, save);
 
         show(player, dialog(text(stepTitle(adding, index, cut ? "硬切" : "移动"), NamedTextColor.WHITE),
-                body(notice), inputs, buttons, 2));
+                body(notice), inputs, buttons, 2,
+                formExitButton(adding, shown, "保存上方数值并关闭窗口（Esc 同效）", reader, save)));
     }
 
-    private void saveMove(boolean cut, Player player, int index, boolean adding, Step original,
-                          Map<String, String> raw, boolean returnToSteps) {
+    /** The values a move/cut form opens with; used to notice an untouched form. */
+    private static Map<String, String> moveFields(Pose pose, int duration, boolean cut, Easing easing,
+                                                  SwayPreset sway, Map<String, String> values) {
+        Map<String, String> displayed = new LinkedHashMap<>();
+        putPose(displayed, pose);
+        displayed.put("duration", String.valueOf(duration));
+        if (!cut) {
+            displayed.put("easing", easingName(easing));
+        }
+        displayed.put("sway", swayName(sway));
+        return merge(displayed, values);
+    }
+
+    private SaveOutcome applyMove(boolean cut, Player player, int index, boolean adding, Step original,
+                                  Map<String, String> raw) {
         try {
             Pose pose = parsePose(raw);
             Step updated;
             if (cut) {
                 int duration = integer(raw, "duration", 0, config.get().maxTrackTicks(), "停留时长");
-                updated = new CutStep(pose, duration, parseSway(raw.get("sway"), true));
+                updated = new CutStep(pose, duration, swayOrStored(raw, ((CutStep) original).sway()));
             } else {
+                MoveStep move = (MoveStep) original;
                 int duration = integer(raw, "duration", 1, config.get().maxTrackTicks(), "时长");
-                Easing easing = Easing.parse(value(raw, "easing", "ease-in-out"));
-                updated = new MoveStep(pose, duration, easing, parseSway(raw.get("sway"), true));
+                Easing easing = Easing.parse(value(raw, "easing", easingName(move.easing())));
+                updated = new MoveStep(pose, duration, easing, swayOrStored(raw, move.sway()));
             }
-            String error = commitStep(player, index, adding, updated);
-            if (error != null) {
-                showMoveForm(cut, player, index, adding, original, raw, notice(error, true));
-                return;
-            }
-            afterStepSaved(player, index, adding, returnToSteps);
+            return persistStep(player, index, adding, updated,
+                    error -> showMoveForm(cut, player, index, adding, original, raw, error));
         } catch (RuntimeException exception) {
             showMoveForm(cut, player, index, adding, original, raw, notice(message(exception), true));
+            return SaveOutcome.FAILED;
         }
     }
 
@@ -783,31 +835,38 @@ public final class EditorUI implements Listener {
                 textInput("duration", "时长 (tick)", value(values, "duration", String.valueOf(step.durationTicks())), 16),
                 singleOption("sway", "摇摆", stepSwayEntries(value(values, "sway", swayName(step.sway()))))
         );
+        Map<String, String> displayed = new LinkedHashMap<>();
+        displayed.put("duration", String.valueOf(step.durationTicks()));
+        displayed.put("sway", swayName(step.sway()));
+        Map<String, String> shown = merge(displayed, values);
+        boolean staged = values != null || adding;
+        PendingSave save = (p, raw) -> untouched(raw, shown, staged)
+                ? SaveOutcome.UNCHANGED : applyHold(p, index, adding, step, raw);
         List<ActionButton> buttons = new ArrayList<>();
         Function<DialogResponseView, Map<String, String>> reader =
                 response -> read(response, "duration", "sway");
-        buttons.add(formButton("保存", "保存这一步", BUTTON_WIDTH, reader,
-                (p, raw) -> saveHold(p, index, adding, step, raw, false)));
-        buttons.add(formButton("保存并返回", "保存后回到步骤列表", BUTTON_WIDTH, reader,
-                (p, raw) -> saveHold(p, index, adding, step, raw, true)));
-        addEditActions(player, buttons, index, adding);
+        buttons.add(formButton("保存", "保存上方编辑框中的数值", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save,
+                        q -> afterStepSaved(q, index, adding, false))));
+        buttons.add(formButton("保存并返回", "保存上方数值后回到步骤列表", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save,
+                        q -> afterStepSaved(q, index, adding, true))));
+        addEditActions(player, buttons, index, adding, reader, save);
         show(player, dialog(text(stepTitle(adding, index, "停留"), NamedTextColor.WHITE),
-                body(notice), inputs, buttons, 2));
+                body(notice), inputs, buttons, 2,
+                formExitButton(adding, shown, "保存上方数值并关闭窗口（Esc 同效）", reader, save)));
     }
 
-    private void saveHold(Player player, int index, boolean adding, HoldStep original,
-                          Map<String, String> raw, boolean returnToSteps) {
+    private SaveOutcome applyHold(Player player, int index, boolean adding, HoldStep original,
+                                  Map<String, String> raw) {
         try {
             int duration = integer(raw, "duration", 1, config.get().maxTrackTicks(), "时长");
-            HoldStep updated = new HoldStep(duration, parseSway(raw.get("sway"), true));
-            String error = commitStep(player, index, adding, updated);
-            if (error != null) {
-                showHoldForm(player, index, adding, original, raw, notice(error, true));
-                return;
-            }
-            afterStepSaved(player, index, adding, returnToSteps);
+            HoldStep updated = new HoldStep(duration, swayOrStored(raw, original.sway()));
+            return persistStep(player, index, adding, updated,
+                    error -> showHoldForm(player, index, adding, original, raw, error));
         } catch (RuntimeException exception) {
             showHoldForm(player, index, adding, original, raw, notice(message(exception), true));
+            return SaveOutcome.FAILED;
         }
     }
 
@@ -818,19 +877,30 @@ public final class EditorUI implements Listener {
                 textInput("timeout", "超时 (tick，0 = 永不)", value(values, "timeout", String.valueOf(step.timeoutTicks())), 16),
                 singleOption("sway", "摇摆", stepSwayEntries(value(values, "sway", swayName(step.sway()))))
         );
+        Map<String, String> displayed = new LinkedHashMap<>();
+        displayed.put("signal", step.signal());
+        displayed.put("timeout", String.valueOf(step.timeoutTicks()));
+        displayed.put("sway", swayName(step.sway()));
+        Map<String, String> shown = merge(displayed, values);
+        boolean staged = values != null || adding;
+        PendingSave save = (p, raw) -> untouched(raw, shown, staged)
+                ? SaveOutcome.UNCHANGED : applyWait(p, index, adding, step, raw);
         List<ActionButton> buttons = new ArrayList<>();
         Function<DialogResponseView, Map<String, String>> reader =
                 response -> read(response, "signal", "timeout", "sway");
-        buttons.add(formButton("保存", "保存这一步", BUTTON_WIDTH, reader,
-                (p, raw) -> saveWait(p, index, adding, step, raw, false)));
-        buttons.add(formButton("保存并返回", "保存后回到步骤列表", BUTTON_WIDTH, reader,
-                (p, raw) -> saveWait(p, index, adding, step, raw, true)));
+        buttons.add(formButton("保存", "保存上方编辑框中的数值", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save,
+                        q -> afterStepSaved(q, index, adding, false))));
+        buttons.add(formButton("保存并返回", "保存上方数值后回到步骤列表", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save,
+                        q -> afterStepSaved(q, index, adding, true))));
         buttons.add(formButton(submenuText("已有信号"), "从所有轨道已有的 wait 信号中选择",
                 BUTTON_WIDTH, reader,
                 (p, raw) -> showSignalPicker(p, index, adding, step, merge(values, raw), 0, null)));
-        addEditActions(player, buttons, index, adding);
+        addEditActions(player, buttons, index, adding, reader, save);
         show(player, dialog(text(stepTitle(adding, index, "等待"), NamedTextColor.WHITE),
-                body(notice), inputs, buttons, 2));
+                body(notice), inputs, buttons, 2,
+                formExitButton(adding, shown, "保存上方数值并关闭窗口（Esc 同效）", reader, save)));
     }
 
     private void showSignalPicker(Player player, int index, boolean adding, WaitStep step,
@@ -876,7 +946,9 @@ public final class EditorUI implements Listener {
                         + (signals.size() > PAGE_SIZE
                         ? " · 第 " + (current + 1) + "/" + pageCount(signals.size()) + " 页" : "");
         show(player, dialog(text("已有信号", NamedTextColor.WHITE),
-                body(notice, text(summary, NamedTextColor.GRAY)), List.of(), buttons, 1));
+                body(notice, text(summary, NamedTextColor.GRAY)), List.of(), buttons, 1,
+                button(back("返回"), "回到等待步骤表单，保留当前输入",
+                        p -> showWaitForm(p, index, adding, step, values, null))));
     }
 
     private void showEffectPicker(Player player, int page, Map<String, String> values,
@@ -911,11 +983,12 @@ public final class EditorUI implements Listener {
                 + (COMMON_EFFECTS.size() > PAGE_SIZE
                 ? " · 第 " + (current + 1) + "/" + pageCount(COMMON_EFFECTS.size()) + " 页" : "");
         show(player, dialog(text("常用效果", NamedTextColor.WHITE),
-                body(null, text(summary, NamedTextColor.GRAY)), List.of(), buttons, 1));
+                body(null, text(summary, NamedTextColor.GRAY)), List.of(), buttons, 1,
+                button(back("返回"), "回到效果表单，保留当前输入", p -> onBack.accept(p, values))));
     }
 
-    private void saveWait(Player player, int index, boolean adding, WaitStep original,
-                          Map<String, String> raw, boolean returnToSteps) {
+    private SaveOutcome applyWait(Player player, int index, boolean adding, WaitStep original,
+                                  Map<String, String> raw) {
         try {
             String signal = value(raw, "signal", "").trim();
             if (signal.isEmpty()) {
@@ -925,15 +998,12 @@ public final class EditorUI implements Listener {
                 throw new FormException("信号最长 80 个字符.");
             }
             int timeout = integer(raw, "timeout", 0, config.get().maxTrackTicks(), "超时");
-            WaitStep updated = new WaitStep(signal, timeout, parseSway(raw.get("sway"), true));
-            String error = commitStep(player, index, adding, updated);
-            if (error != null) {
-                showWaitForm(player, index, adding, original, raw, notice(error, true));
-                return;
-            }
-            afterStepSaved(player, index, adding, returnToSteps);
+            WaitStep updated = new WaitStep(signal, timeout, swayOrStored(raw, original.sway()));
+            return persistStep(player, index, adding, updated,
+                    error -> showWaitForm(player, index, adding, original, raw, error));
         } catch (RuntimeException exception) {
             showWaitForm(player, index, adding, original, raw, notice(message(exception), true));
+            return SaveOutcome.FAILED;
         }
     }
 
@@ -944,44 +1014,50 @@ public final class EditorUI implements Listener {
                 singleOption("easing", "缓动", easingEntries(value(values, "easing", easingName(step.easing())))),
                 singleOption("sway", "摇摆", stepSwayEntries(value(values, "sway", swayName(step.sway()))))
         );
+        Map<String, String> displayed = new LinkedHashMap<>();
+        displayed.put("duration", String.valueOf(step.durationTicks()));
+        displayed.put("easing", easingName(step.easing()));
+        displayed.put("sway", swayName(step.sway()));
+        Map<String, String> shown = merge(displayed, values);
+        boolean staged = values != null || adding;
+        PendingSave save = (p, raw) -> untouched(raw, shown, staged)
+                ? SaveOutcome.UNCHANGED : applyPath(p, index, adding, step, raw);
         List<ActionButton> buttons = new ArrayList<>();
         Function<DialogResponseView, Map<String, String>> reader =
                 response -> read(response, "duration", "easing", "sway");
-        buttons.add(formButton("保存", "保存时长、缓动和摇摆", BUTTON_WIDTH, reader,
-                (p, raw) -> savePath(false, p, index, adding, step, raw, false)));
-        buttons.add(formButton("保存并返回", "保存后回到步骤列表", BUTTON_WIDTH, reader,
-                (p, raw) -> savePath(false, p, index, adding, step, raw, true)));
+        buttons.add(formButton("保存", "保存上方编辑框中的数值", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save,
+                        q -> afterStepSaved(q, index, adding, false))));
+        buttons.add(formButton("保存并返回", "保存上方数值后回到步骤列表", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save,
+                        q -> afterStepSaved(q, index, adding, true))));
         buttons.add(formButton(submenuText("路径点"), step.points().size() + " 个点；先保存基础字段，再编辑路径点",
                 BUTTON_WIDTH, reader,
-                (p, raw) -> savePath(true, p, index, adding, step, raw, false)));
-        addEditActions(player, buttons, index, adding);
+                (p, raw) -> saveExplicitly(p, raw, save, q -> {
+                    EditorSession current = editors.session(q);
+                    if (current != null) {
+                        current.selected = adding ? current.selected : index;
+                    }
+                    showPathPoints(q, 0, null);
+                })));
+        addEditActions(player, buttons, index, adding, reader, save);
         show(player, dialog(text(stepTitle(adding, index, "路径"), NamedTextColor.WHITE), body(notice),
-                inputs, buttons, 2));
+                inputs, buttons, 2,
+                formExitButton(adding, shown, "保存上方数值并关闭窗口（Esc 同效）", reader, save)));
     }
 
-    private void savePath(boolean editPoints, Player player, int index, boolean adding, PathStep original,
-                          Map<String, String> raw, boolean returnToSteps) {
+    private SaveOutcome applyPath(Player player, int index, boolean adding, PathStep original,
+                                  Map<String, String> raw) {
         try {
             int duration = integer(raw, "duration", 1, config.get().maxTrackTicks(), "时长");
-            Easing easing = Easing.parse(value(raw, "easing", "ease-in-out"));
-            SwayPreset sway = parseSway(raw.get("sway"), true);
+            Easing easing = Easing.parse(value(raw, "easing", easingName(original.easing())));
+            SwayPreset sway = swayOrStored(raw, original.sway());
             PathStep updated = new PathStep(original.points(), duration, easing, sway);
-            String error = commitStep(player, index, adding, updated);
-            if (error != null) {
-                showPathForm(player, index, adding, original, raw, notice(error, true));
-                return;
-            }
-            if (editPoints) {
-                EditorSession session = editors.session(player);
-                if (session != null) {
-                    session.selected = adding ? session.selected : index;
-                }
-                showPathPoints(player, 0, null);
-            } else {
-                afterStepSaved(player, index, adding, returnToSteps);
-            }
+            return persistStep(player, index, adding, updated,
+                    error -> showPathForm(player, index, adding, original, raw, error));
         } catch (RuntimeException exception) {
             showPathForm(player, index, adding, original, raw, notice(message(exception), true));
+            return SaveOutcome.FAILED;
         }
     }
 
@@ -995,20 +1071,31 @@ public final class EditorUI implements Listener {
                 textInput("amplifier", "等级 (0 = I 级)", value(values, "amplifier", String.valueOf(effect.amplifier())), 8),
                 textInput("duration", "时长 (tick，0 = 持续)", value(values, "duration", String.valueOf(effect.durationTicks())), 16)
         );
+        Map<String, String> displayed = new LinkedHashMap<>();
+        displayed.put("action", effect.action().name().toLowerCase(Locale.ROOT));
+        displayed.put("effect", shortEffectKey(effect.key()));
+        displayed.put("amplifier", String.valueOf(effect.amplifier()));
+        displayed.put("duration", String.valueOf(effect.durationTicks()));
+        Map<String, String> shown = merge(displayed, values);
+        boolean staged = values != null || adding;
+        PendingSave save = (p, raw) -> untouched(raw, shown, staged)
+                ? SaveOutcome.UNCHANGED : applyEffectStep(p, index, adding, step, raw);
         List<ActionButton> buttons = new ArrayList<>();
         Function<DialogResponseView, Map<String, String>> reader =
                 response -> read(response, "action", "effect", "amplifier", "duration");
-        buttons.add(formButton("保存", "保存这一步", BUTTON_WIDTH, reader,
-                (p, raw) -> saveEffectStep(p, index, adding, step, raw, false)));
-        buttons.add(formButton("保存并返回", "保存后回到步骤列表", BUTTON_WIDTH, reader,
-                (p, raw) -> saveEffectStep(p, index, adding, step, raw, true)));
+        buttons.add(formButton("保存", "保存上方编辑框中的数值", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save,
+                        q -> afterStepSaved(q, index, adding, false))));
+        buttons.add(formButton("保存并返回", "保存上方数值后回到步骤列表", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save,
+                        q -> afterStepSaved(q, index, adding, true))));
         buttons.add(formButton(submenuText("常用效果"), "从常用药水效果中选择",
                 BUTTON_WIDTH, reader,
                 (p, raw) -> showEffectPicker(p, 0, merge(values, raw),
                         (q, next) -> showEffectStepForm(q, index, adding, step, next,
                                 notice("已选择效果.", false)),
                         (q, next) -> showEffectStepForm(q, index, adding, step, next, null))));
-        addEditActions(player, buttons, index, adding);
+        addEditActions(player, buttons, index, adding, reader, save);
         List<Component> lines = new ArrayList<>();
         if (!editors.fakeCameraAvailable() && CameraEffects.isCameraDependent(effect)) {
             lines.add(fallbackEffectLine());
@@ -1018,7 +1105,8 @@ public final class EditorUI implements Listener {
             lines.add(darknessBlendLine());
         }
         show(player, dialog(text(stepTitle(adding, index, "效果"), NamedTextColor.WHITE),
-                body(notice, lines.toArray(Component[]::new)), inputs, buttons, 1));
+                body(notice, lines.toArray(Component[]::new)), inputs, buttons, 1,
+                formExitButton(adding, shown, "保存上方数值并关闭窗口（Esc 同效）", reader, save)));
     }
 
     private Component fallbackEffectLine() {
@@ -1039,8 +1127,8 @@ public final class EditorUI implements Listener {
                 NamedTextColor.GRAY);
     }
 
-    private void saveEffectStep(Player player, int index, boolean adding, EffectStep original,
-                                Map<String, String> raw, boolean returnToSteps) {
+    private SaveOutcome applyEffectStep(Player player, int index, boolean adding, EffectStep original,
+                                       Map<String, String> raw) {
         try {
             EffectAction action = EffectAction.parse(value(raw, "action", "add"));
             String key = value(raw, "effect", "").trim();
@@ -1056,14 +1144,11 @@ public final class EditorUI implements Listener {
             }
             EffectSpec spec = new EffectSpec(type, type.getKey().toString(), action, amplifier, duration);
             EffectStep updated = new EffectStep(spec);
-            String error = commitStep(player, index, adding, updated);
-            if (error != null) {
-                showEffectStepForm(player, index, adding, original, raw, notice(error, true));
-                return;
-            }
-            afterStepSaved(player, index, adding, returnToSteps);
+            return persistStep(player, index, adding, updated,
+                    error -> showEffectStepForm(player, index, adding, original, raw, error));
         } catch (RuntimeException exception) {
             showEffectStepForm(player, index, adding, original, raw, notice(message(exception), true));
+            return SaveOutcome.FAILED;
         }
     }
 
@@ -1076,21 +1161,34 @@ public final class EditorUI implements Listener {
                 textInput("stay", "停留 (tick)", value(values, "stay", String.valueOf(step.stayTicks())), 8),
                 textInput("fade_out", "淡出 (tick)", value(values, "fade_out", String.valueOf(step.fadeOutTicks())), 8)
         );
+        Map<String, String> displayed = new LinkedHashMap<>();
+        displayed.put("title", step.title());
+        displayed.put("subtitle", step.subtitle());
+        displayed.put("fade_in", String.valueOf(step.fadeInTicks()));
+        displayed.put("stay", String.valueOf(step.stayTicks()));
+        displayed.put("fade_out", String.valueOf(step.fadeOutTicks()));
+        Map<String, String> shown = merge(displayed, values);
+        boolean staged = values != null || adding;
+        PendingSave save = (p, raw) -> untouched(raw, shown, staged)
+                ? SaveOutcome.UNCHANGED : applyTitleStep(p, index, adding, step, raw);
         List<ActionButton> buttons = new ArrayList<>();
         Function<DialogResponseView, Map<String, String>> reader =
                 response -> read(response, "title", "subtitle", "fade_in", "stay", "fade_out");
-        buttons.add(formButton("保存", "保存这一步", BUTTON_WIDTH, reader,
-                (p, raw) -> saveTitleStep(p, index, adding, step, raw, false)));
-        buttons.add(formButton("保存并返回", "保存后回到步骤列表", BUTTON_WIDTH, reader,
-                (p, raw) -> saveTitleStep(p, index, adding, step, raw, true)));
-        addEditActions(player, buttons, index, adding);
+        buttons.add(formButton("保存", "保存上方编辑框中的数值", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save,
+                        q -> afterStepSaved(q, index, adding, false))));
+        buttons.add(formButton("保存并返回", "保存上方数值后回到步骤列表", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save,
+                        q -> afterStepSaved(q, index, adding, true))));
+        addEditActions(player, buttons, index, adding, reader, save);
         show(player, dialog(text(stepTitle(adding, index, "标题"), NamedTextColor.WHITE), body(notice,
                 text("MiniMessage；至少填写标题或副标题.", NamedTextColor.GRAY)),
-                inputs, buttons, 1));
+                inputs, buttons, 1,
+                formExitButton(adding, shown, "保存上方数值并关闭窗口（Esc 同效）", reader, save)));
     }
 
-    private void saveTitleStep(Player player, int index, boolean adding, TitleStep original,
-                               Map<String, String> raw, boolean returnToSteps) {
+    private SaveOutcome applyTitleStep(Player player, int index, boolean adding, TitleStep original,
+                                       Map<String, String> raw) {
         try {
             String title = value(raw, "title", "");
             String subtitle = value(raw, "subtitle", "");
@@ -1103,14 +1201,11 @@ public final class EditorUI implements Listener {
             int stay = integer(raw, "stay", 0, config.get().maxTrackTicks(), "停留");
             int fadeOut = integer(raw, "fade_out", 0, config.get().maxTrackTicks(), "淡出");
             TitleStep updated = new TitleStep(title, subtitle, fadeIn, stay, fadeOut);
-            String error = commitStep(player, index, adding, updated);
-            if (error != null) {
-                showTitleStepForm(player, index, adding, original, raw, notice(error, true));
-                return;
-            }
-            afterStepSaved(player, index, adding, returnToSteps);
+            return persistStep(player, index, adding, updated,
+                    error -> showTitleStepForm(player, index, adding, original, raw, error));
         } catch (RuntimeException exception) {
             showTitleStepForm(player, index, adding, original, raw, notice(message(exception), true));
+            return SaveOutcome.FAILED;
         }
     }
 
@@ -1132,6 +1227,23 @@ public final class EditorUI implements Listener {
         return editors.applyDraft(player, session.draft.withSteps(steps), index);
     }
 
+    /**
+     * Writes {@code updated} unless it is exactly what is stored already. On rejection the form
+     * is reopened through {@code reshow}, carrying the error, so no typed value is lost.
+     */
+    private SaveOutcome persistStep(Player player, int index, boolean adding, Step updated,
+                                    Consumer<Notice> reshow) {
+        if (alreadyStored(editors.session(player), index, adding, updated)) {
+            return SaveOutcome.UNCHANGED;
+        }
+        String error = commitStep(player, index, adding, updated);
+        if (error != null) {
+            reshow.accept(notice(error, true));
+            return SaveOutcome.FAILED;
+        }
+        return SaveOutcome.SAVED;
+    }
+
     private void afterStepSaved(Player player, int index, boolean adding, boolean returnToSteps) {
         EditorSession session = editors.session(player);
         if (session == null) {
@@ -1147,7 +1259,14 @@ public final class EditorUI implements Listener {
         }
     }
 
-    private void addEditActions(Player player, List<ActionButton> buttons, int index, boolean adding) {
+    /**
+     * Adds the actions shared by every step form. Actions that leave the form first persist the
+     * fields on screen (应存尽存). The Save buttons stay the explicit way to write the fields
+     * without navigating; 删除 and 取消 are the only actions that throw input away on purpose.
+     */
+    private void addEditActions(Player player, List<ActionButton> buttons, int index, boolean adding,
+                                Function<DialogResponseView, Map<String, String>> reader,
+                                PendingSave save) {
         EditorSession session = editors.session(player);
         int stepCount = session == null ? 0 : session.draft.steps().size();
         if (adding) {
@@ -1157,20 +1276,26 @@ public final class EditorUI implements Listener {
             }));
             return;
         }
-        buttons.add(button("预览此步", "只播放选中的这一步；之前的效果不会回放", p -> preview(p, index, true)));
+        buttons.add(saveAction("预览此步", "先保存上方数值，再只播放选中的这一步；之前的效果不会回放",
+                reader, save, (p, outcome) -> preview(p, index, true)));
         if (index > 0) {
-            buttons.add(button("<- 上一步", "不保存当前输入，按已保存内容切到上一步",
-                    p -> showEditStepForm(p, index - 1, null, null)));
+            buttons.add(saveAction("<- 上一步", "先保存上方数值，再切到上一步", reader, save,
+                    (p, outcome) -> showEditStepForm(p, index - 1, null, savedNotice(outcome))));
         }
         if (index + 1 < stepCount) {
-            buttons.add(button("下一步 ->", "不保存当前输入，按已保存内容切到下一步",
-                    p -> showEditStepForm(p, index + 1, null, null)));
+            buttons.add(saveAction("下一步 ->", "先保存上方数值，再切到下一步", reader, save,
+                    (p, outcome) -> showEditStepForm(p, index + 1, null, savedNotice(outcome))));
         }
-        buttons.add(button("上移", "按已保存内容把这一步向前移动", p -> moveStep(p, index, -1)));
-        buttons.add(button("下移", "按已保存内容把这一步向后移动", p -> moveStep(p, index, 1)));
-        buttons.add(button("复制", "按已保存内容复制这一步并插入到后面", p -> duplicateStep(p, index)));
-        buttons.add(button("删除", "按已保存内容删除这一步（可撤销）", p -> deleteStep(p, index)));
-        buttons.add(button("取消", "不保存并回到步骤列表", p -> showSteps(p, pageOf(index), null)));
+        buttons.add(saveAction("上移", "先保存上方数值，再与上一步交换", reader, save,
+                (p, outcome) -> moveStep(p, index, -1)));
+        buttons.add(saveAction("下移", "先保存上方数值，再与下一步交换", reader, save,
+                (p, outcome) -> moveStep(p, index, 1)));
+        buttons.add(saveAction("复制", "先保存上方数值，再复制这一步并插入到后面", reader, save,
+                (p, outcome) -> duplicateStep(p, index)));
+        buttons.add(button("删除", "删除这一步（可撤销）；上方未保存的输入会一起丢弃",
+                p -> deleteStep(p, index)));
+        buttons.add(button("取消", "放弃上方未保存的输入并回到步骤列表",
+                p -> showSteps(p, pageOf(index), null)));
     }
 
     private void moveStep(Player player, int index, int delta) {
@@ -1273,8 +1398,9 @@ public final class EditorUI implements Listener {
         if (current < pageCount(path.points().size()) - 1) {
             buttons.add(button("下一页", "下一页路径点", p -> showPathPoints(p, current + 1, null)));
         }
-        buttons.add(button("追加当前视角", "关闭窗口并立即把当前视角追加为路径点", p ->
-                capturePose(p, false, pose -> appendPathPoint(p, pose))));
+        buttons.add(button("追加当前视角", "关闭窗口，立即把当前视角追加为路径点并保存", p ->
+                capturePose(p, false, pose -> appendPathPoint(p, pose),
+                        error -> showPathPoints(p, current, notice(error, true)))));
         buttons.add(button(back("返回"), "回到路径步骤表单", p -> showEditStepForm(p, session.selected, null, null)));
 
         show(player, dialog(text("路径点 · 步骤 " + (session.selected + 1), NamedTextColor.WHITE),
@@ -1329,54 +1455,100 @@ public final class EditorUI implements Listener {
         Pose pose = path.points().get(pointIndex);
         List<DialogInput> inputs = new ArrayList<>();
         addPoseInputs(inputs, pose, values);
+        Map<String, String> displayed = new LinkedHashMap<>();
+        putPose(displayed, pose);
+        Map<String, String> shown = merge(displayed, values);
+        boolean staged = values != null;
+        PendingSave save = (p, raw) -> untouched(raw, shown, staged)
+                ? SaveOutcome.UNCHANGED : applyPathPoint(p, pointIndex, raw);
+        Function<DialogResponseView, Map<String, String>> reader =
+                response -> read(response, "x", "y", "z", "yaw", "pitch");
         List<ActionButton> buttons = new ArrayList<>();
-        buttons.add(formButton("保存", "保存这个路径点", BUTTON_WIDTH,
-                response -> read(response, "x", "y", "z", "yaw", "pitch"),
-                (p, raw) -> savePathPoint(p, pointIndex, pose, raw)));
-        buttons.add(button("取当前视角", "关闭窗口并立即把当前视角填入", p -> capturePose(p, false, captured -> {
-            Map<String, String> next = copy(values);
-            putPose(next, captured);
-            showPathPointForm(p, pointIndex, next, notice("已取当前视角.", false));
-        })));
-        buttons.add(button("传送到此", "关闭窗口并传送到这个路径点；/camerarail edit 回来",
-                p -> teleportToPose(p, pose, false)));
-        buttons.add(button("插入当前视角", "关闭窗口并立即在这个点之后插入一个点", p ->
-                capturePose(p, false, captured -> insertPathPoint(p, pointIndex, captured))));
+        buttons.add(formButton("保存", "保存上方编辑框中的坐标", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save, q ->
+                        showPathPointForm(q, pointIndex, null, notice("已保存路径点.", false)))));
+        buttons.add(formButton("取当前视角", "立即把当前视角保存到这个路径点", BUTTON_WIDTH, reader,
+                (p, raw) -> capturePose(p, false, captured -> saveCapturedPathPoint(p, pointIndex, captured),
+                        error -> showPathPointForm(p, pointIndex, merge(shown, input(raw)),
+                                notice(error, true)))));
+        buttons.add(formButton("传送到此", "先保存上方坐标，再传送到这个路径点；/camerarail edit 回来",
+                BUTTON_WIDTH, reader, (p, raw) -> {
+                    Map<String, String> userInput = input(raw);
+                    if (save.save(p, userInput) == SaveOutcome.FAILED) {
+                        return;
+                    }
+                    teleportToPose(p, parsePose(userInput), false);
+                }));
+        buttons.add(formButton("插入当前视角", "先保存上方坐标，再在这个点之后插入当前视角",
+                BUTTON_WIDTH, reader, (p, raw) -> {
+                    if (save.save(p, input(raw)) == SaveOutcome.FAILED) {
+                        return;
+                    }
+                    capturePose(p, false, captured -> insertPathPoint(p, pointIndex, captured),
+                            error -> showPathPointForm(p, pointIndex, merge(shown, input(raw)),
+                                    notice(error, true)));
+                }));
         if (pointIndex > 0) {
-            buttons.add(button("<- 上一步", "不保存当前输入，按已保存内容切到上一个路径点",
-                    p -> showPathPointForm(p, pointIndex - 1, null, null)));
+            buttons.add(saveAction("<- 上一步", "先保存上方坐标，再切到上一个路径点", reader, save,
+                    (p, outcome) -> showPathPointForm(p, pointIndex - 1, null, savedNotice(outcome))));
         }
         if (pointIndex + 1 < path.points().size()) {
-            buttons.add(button("下一步 ->", "不保存当前输入，按已保存内容切到下一个路径点",
-                    p -> showPathPointForm(p, pointIndex + 1, null, null)));
+            buttons.add(saveAction("下一步 ->", "先保存上方坐标，再切到下一个路径点", reader, save,
+                    (p, outcome) -> showPathPointForm(p, pointIndex + 1, null, savedNotice(outcome))));
         }
-        buttons.add(button("上移", "与前一个路径点交换", p -> movePathPoint(p, pointIndex, -1)));
-        buttons.add(button("下移", "与后一个路径点交换", p -> movePathPoint(p, pointIndex, 1)));
-        buttons.add(button("删除", "删除这个路径点（至少保留一个）", p -> deletePathPoint(p, pointIndex)));
-        buttons.add(button("取消", "不保存并回到路径点列表", p -> showPathPoints(p, pageOf(pointIndex), null)));
+        buttons.add(saveAction("上移", "先保存上方坐标，再与前一个路径点交换", reader, save,
+                (p, outcome) -> movePathPoint(p, pointIndex, -1)));
+        buttons.add(saveAction("下移", "先保存上方坐标，再与后一个路径点交换", reader, save,
+                (p, outcome) -> movePathPoint(p, pointIndex, 1)));
+        buttons.add(button("删除", "删除这个路径点（至少保留一个）；上方未保存的输入会一起丢弃",
+                p -> deletePathPoint(p, pointIndex)));
+        buttons.add(button("取消", "放弃上方未保存的输入并回到路径点列表",
+                p -> showPathPoints(p, pageOf(pointIndex), null)));
         show(player, dialog(text("路径点 " + (pointIndex + 1), NamedTextColor.WHITE), body(notice),
-                inputs, buttons, 2));
+                inputs, buttons, 2,
+                saveAndCloseButton(shown, "保存上方坐标并关闭窗口（Esc 同效）", reader, save)));
     }
 
-    private void savePathPoint(Player player, int pointIndex, Pose original, Map<String, String> raw) {
+    private SaveOutcome applyPathPoint(Player player, int pointIndex, Map<String, String> raw) {
         try {
-            PathStep path = selectedPath(editors.session(player));
+            EditorSession session = editors.session(player);
+            PathStep path = selectedPath(session);
             if (path == null) {
                 throw new FormException("当前选中的不是路径步骤.");
             }
+            if (pointIndex < 0 || pointIndex >= path.points().size()) {
+                throw new FormException("路径点不存在.");
+            }
             Pose pose = parsePose(raw);
+            if (pose.equals(path.points().get(pointIndex))) {
+                return SaveOutcome.UNCHANGED;
+            }
             List<Pose> points = new ArrayList<>(path.points());
             points.set(pointIndex, pose);
             PathStep updated = new PathStep(points, path.durationTicks(), path.easing(), path.sway());
             String error = commitPath(player, updated);
             if (error != null) {
                 showPathPointForm(player, pointIndex, raw, notice(error, true));
-                return;
+                return SaveOutcome.FAILED;
             }
-            showPathPointForm(player, pointIndex, null, notice("已保存路径点.", false));
+            return SaveOutcome.SAVED;
         } catch (RuntimeException exception) {
             showPathPointForm(player, pointIndex, raw, notice(message(exception), true));
+            return SaveOutcome.FAILED;
         }
+    }
+
+    /** Captures the player's current view as this path point and saves it right away. */
+    private void saveCapturedPathPoint(Player player, int pointIndex, Pose pose) {
+        Map<String, String> raw = new LinkedHashMap<>();
+        putPose(raw, pose);
+        SaveOutcome outcome = applyPathPoint(player, pointIndex, raw);
+        if (outcome == SaveOutcome.FAILED) {
+            return;
+        }
+        showPathPointForm(player, pointIndex, null,
+                notice(outcome == SaveOutcome.SAVED
+                        ? "已取当前视角并保存." : "当前视角与已保存的路径点相同.", false));
     }
 
     private void movePathPoint(Player player, int pointIndex, int delta) {
@@ -1501,28 +1673,42 @@ public final class EditorUI implements Listener {
         }
         List<DialogInput> inputs = new ArrayList<>();
         addPoseInputs(inputs, current, values);
+        Map<String, String> displayed = new LinkedHashMap<>();
+        putPose(displayed, current);
+        Map<String, String> shown = merge(displayed, values);
+        boolean staged = values != null;
+        PendingSave save = (p, raw) -> untouched(raw, shown, staged)
+                ? SaveOutcome.UNCHANGED : applyPose(p, target, raw);
+        // An exit form without a stored pose only previews the player's feet: an explicit Save
+        // stores that preview, while closing the untouched form must not create a custom exit.
+        boolean storeExitPreview = target == PoseTarget.EXIT && track.exit() == null;
+        PendingSave explicitSave = storeExitPreview ? (p, raw) -> applyPose(p, target, raw) : save;
+        Function<DialogResponseView, Map<String, String>> reader =
+                response -> read(response, "x", "y", "z", "yaw", "pitch");
         List<ActionButton> buttons = new ArrayList<>();
-        buttons.add(formButton("保存", "保存这个位置", BUTTON_WIDTH,
-                response -> read(response, "x", "y", "z", "yaw", "pitch"),
-                (p, raw) -> savePose(p, target, raw)));
-        buttons.add(button(target == PoseTarget.EXIT ? "取当前脚下位置" : "取当前视角",
-                target == PoseTarget.EXIT
-                        ? "关闭窗口并立即取当前脚下位置"
-                        : "关闭窗口并立即取当前视角", p -> capturePose(p, target == PoseTarget.EXIT, captured -> {
-            Map<String, String> next = copy(values);
-            putPose(next, captured);
-            showPoseForm(p, target, next, notice("已取当前位置.", false));
-        })));
+        buttons.add(formButton("保存", "保存上方编辑框中的坐标", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, explicitSave, q -> {
+                    if (target == PoseTarget.START) {
+                        showTrack(q, notice("起点已更新.", false));
+                    } else {
+                        showExitMode(q, notice("自定义退出点已保存.", false));
+                    }
+                })));
+        buttons.add(formButton(target == PoseTarget.EXIT ? "取当前脚下位置" : "取当前视角",
+                target == PoseTarget.EXIT ? "立即把当前脚下位置保存为退出点" : "立即把当前视角保存为起点",
+                BUTTON_WIDTH, reader, (p, raw) -> capturePose(p, target == PoseTarget.EXIT,
+                captured -> saveCapturedPose(p, target, captured),
+                error -> showPoseForm(p, target, merge(shown, input(raw)), notice(error, true)))));
         if (target == PoseTarget.START) {
-            buttons.add(button("传送到此", "关闭窗口并传送到已保存的起点位置；/camerarail edit 回来",
-                    p -> teleportToPose(p, track.start(), false)));
+            buttons.add(saveAction("传送到此", "先保存上方坐标，再传送到起点位置；/camerarail edit 回来",
+                    reader, save, (p, outcome) -> teleportToPose(p, savedPose(p, target), false)));
         } else if (track.exit() != null) {
-            buttons.add(button("传送到此", "关闭窗口并传送到已保存的退出位置；/camerarail edit 回来",
-                    p -> teleportToPose(p, track.exit(), true)));
+            buttons.add(saveAction("传送到此", "先保存上方坐标，再传送到退出位置；/camerarail edit 回来",
+                    reader, save, (p, outcome) -> teleportToPose(p, savedPose(p, target), true)));
         }
         buttons.add(button("取消", target == PoseTarget.EXIT
-                        ? "不保存并回到退出点设置"
-                        : "不保存并回到轨道概览",
+                        ? "放弃上方未保存的输入并回到退出点设置"
+                        : "放弃上方未保存的输入并回到轨道概览",
                 p -> {
                     if (target == PoseTarget.EXIT) {
                         showExitMode(p, null);
@@ -1535,33 +1721,57 @@ public final class EditorUI implements Listener {
                 : "退出点是玩家脚部位置；保存后使用自定义位置.";
         show(player, dialog(text(target == PoseTarget.START ? "轨道起点" : "轨道退出点 · 自定义",
                         NamedTextColor.WHITE),
-                body(notice, text(hintText, NamedTextColor.GRAY)), inputs, buttons, 1));
+                body(notice, text(hintText, NamedTextColor.GRAY)), inputs, buttons, 1,
+                saveAndCloseButton(shown, "保存上方坐标并关闭窗口（Esc 同效）", reader, save)));
     }
 
-    private void savePose(Player player, PoseTarget target, Map<String, String> raw) {
+    private SaveOutcome applyPose(Player player, PoseTarget target, Map<String, String> raw) {
         EditorSession session = editors.session(player);
         if (session == null) {
             showTrackList(player, 0, null);
-            return;
+            return SaveOutcome.FAILED;
         }
         try {
             Pose pose = parsePose(raw);
+            Pose stored = target == PoseTarget.START ? session.draft.start() : session.draft.exit();
+            if (pose.equals(stored)) {
+                return SaveOutcome.UNCHANGED;
+            }
             CameraTrack updated = target == PoseTarget.START
                     ? session.draft.withStart(pose)
                     : session.draft.withExit(pose);
             String error = editors.applyDraft(player, updated, session.selected);
             if (error != null) {
                 showPoseForm(player, target, raw, notice(error, true));
-                return;
+                return SaveOutcome.FAILED;
             }
-            if (target == PoseTarget.START) {
-                showTrack(player, notice("起点已更新.", false));
-            } else {
-                showExitMode(player, notice("自定义退出点已保存.", false));
-            }
+            return SaveOutcome.SAVED;
         } catch (RuntimeException exception) {
             showPoseForm(player, target, raw, notice(message(exception), true));
+            return SaveOutcome.FAILED;
         }
+    }
+
+    /** Captures the player's current view or feet position and saves it as the track pose. */
+    private void saveCapturedPose(Player player, PoseTarget target, Pose pose) {
+        Map<String, String> raw = new LinkedHashMap<>();
+        putPose(raw, pose);
+        SaveOutcome outcome = applyPose(player, target, raw);
+        if (outcome == SaveOutcome.FAILED) {
+            return;
+        }
+        String taken = target == PoseTarget.EXIT ? "已取当前脚下位置并保存." : "已取当前视角并保存.";
+        showPoseForm(player, target, null,
+                notice(outcome == SaveOutcome.SAVED ? taken : "与已保存的位置相同.", false));
+    }
+
+    /** The pose just stored by the start/exit form, for its 传送到此 button. */
+    private Pose savedPose(Player player, PoseTarget target) {
+        EditorSession session = editors.session(player);
+        if (session == null) {
+            return null;
+        }
+        return target == PoseTarget.START ? session.draft.start() : session.draft.exit();
     }
 
     // ------------------------------------------------------------------ entry effects
@@ -1626,28 +1836,38 @@ public final class EditorUI implements Listener {
             session.uiPage = 0;
         }
         EffectSpec existing = index >= 0 && index < effects.size() ? effects.get(index) : null;
+        Map<String, String> displayed = new LinkedHashMap<>();
+        displayed.put("effect", existing == null ? "darkness" : shortEffectKey(existing.key()));
+        displayed.put("amplifier", existing == null ? "0" : String.valueOf(existing.amplifier()));
+        displayed.put("duration", existing == null ? "0" : String.valueOf(existing.durationTicks()));
+        Map<String, String> shown = merge(displayed, values);
         List<DialogInput> inputs = List.of(
-                textInput("effect", "效果 id", value(values, "effect",
-                        existing == null ? "darkness" : shortEffectKey(existing.key())), 80),
-                textInput("amplifier", "等级 (0 = I 级)", value(values, "amplifier",
-                        existing == null ? "0" : String.valueOf(existing.amplifier())), 8),
-                textInput("duration", "时长 (tick，0 = 持续)", value(values, "duration",
-                        existing == null ? "0" : String.valueOf(existing.durationTicks())), 16)
+                textInput("effect", "效果 id", value(shown, "effect", "darkness"), 80),
+                textInput("amplifier", "等级 (0 = I 级)", value(shown, "amplifier", "0"), 8),
+                textInput("duration", "时长 (tick，0 = 持续)", value(shown, "duration", "0"), 16)
         );
         List<ActionButton> buttons = new ArrayList<>();
         Function<DialogResponseView, Map<String, String>> reader =
                 response -> read(response, "effect", "amplifier", "duration");
-        buttons.add(formButton("保存", "保存这个入场效果", BUTTON_WIDTH, reader,
-                (p, raw) -> saveEntryEffect(p, index, raw)));
+        PendingSave save = (p, raw) -> untouched(raw, shown, values != null || existing == null)
+                ? SaveOutcome.UNCHANGED : applyEntryEffect(p, index, raw);
+        buttons.add(formButton("保存", "保存上方编辑框中的数值", BUTTON_WIDTH, reader,
+                (p, raw) -> saveExplicitly(p, raw, save, q -> {
+                    EditorSession current = editors.session(q);
+                    int count = current == null ? 0 : current.draft.entryEffects().size();
+                    showEntryEffects(q, pageOf(Math.max(0, count - 1)), notice("已保存入场效果.", false));
+                })));
         buttons.add(formButton(submenuText("常用效果"), "从常用药水效果中选择",
                 BUTTON_WIDTH, reader,
                 (p, raw) -> showEffectPicker(p, 0, merge(values, raw),
                         (q, next) -> showEntryEffectForm(q, index, next, notice("已选择效果.", false)),
                         (q, next) -> showEntryEffectForm(q, index, next, null))));
         if (existing != null) {
-            buttons.add(button("删除", "删除这个入场效果", p -> deleteEntryEffect(p, index)));
+            buttons.add(button("删除", "删除这个入场效果；上方未保存的输入会一起丢弃",
+                    p -> deleteEntryEffect(p, index)));
         }
-        buttons.add(button("取消", "不保存并回到入场效果列表", p -> showEntryEffects(p, 0, null)));
+        buttons.add(button("取消", "放弃上方未保存的输入并回到入场效果列表",
+                p -> showEntryEffects(p, 0, null)));
         List<Component> lines = new ArrayList<>();
         if (!editors.fakeCameraAvailable()
                 && (existing == null || CameraEffects.isCameraDependent(existing))) {
@@ -1659,14 +1879,15 @@ public final class EditorUI implements Listener {
         }
         lines.add(text("只支持添加；时长 0 = 持续.", NamedTextColor.GRAY));
         show(player, dialog(text(existing == null ? "添加入场效果" : "入场效果 " + (index + 1), NamedTextColor.WHITE),
-                body(notice, lines.toArray(Component[]::new)), inputs, buttons, 1));
+                body(notice, lines.toArray(Component[]::new)), inputs, buttons, 1,
+                formExitButton(index < 0, shown, "保存上方数值并关闭窗口（Esc 同效）", reader, save)));
     }
 
-    private void saveEntryEffect(Player player, int index, Map<String, String> raw) {
+    private SaveOutcome applyEntryEffect(Player player, int index, Map<String, String> raw) {
         EditorSession session = editors.session(player);
         if (session == null) {
             showTrackList(player, 0, null);
-            return;
+            return SaveOutcome.FAILED;
         }
         try {
             String key = value(raw, "effect", "").trim();
@@ -1679,6 +1900,9 @@ public final class EditorUI implements Listener {
             EffectSpec spec = new EffectSpec(type, type.getKey().toString(), EffectAction.ADD, amplifier, duration);
             List<EffectSpec> effects = new ArrayList<>(session.draft.entryEffects());
             if (index >= 0 && index < effects.size()) {
+                if (spec.equals(effects.get(index))) {
+                    return SaveOutcome.UNCHANGED;
+                }
                 effects.set(index, spec);
             } else {
                 effects.add(spec);
@@ -1686,11 +1910,12 @@ public final class EditorUI implements Listener {
             String error = editors.applyDraft(player, session.draft.withEntryEffects(effects), session.selected);
             if (error != null) {
                 showEntryEffectForm(player, index, raw, notice(error, true));
-                return;
+                return SaveOutcome.FAILED;
             }
-            showEntryEffects(player, pageOf(effects.size() - 1), notice("已保存入场效果.", false));
+            return SaveOutcome.SAVED;
         } catch (RuntimeException exception) {
             showEntryEffectForm(player, index, raw, notice(message(exception), true));
+            return SaveOutcome.FAILED;
         }
     }
 
@@ -1837,25 +2062,31 @@ public final class EditorUI implements Listener {
         });
     }
 
-    private void capturePose(Player player, boolean feet, Consumer<Pose> then) {
+    /**
+     * Captures the player's current eye/feet pose and hands it to {@code then} one tick later.
+     * Any failure is reported through {@code onFailure} so a caller that owns a form can reopen
+     * it with the typed values instead of dropping the player on another screen; when no handler
+     * is given the editor falls back to the track overview.
+     */
+    private void capturePose(Player player, boolean feet, Consumer<Pose> then, Consumer<String> onFailure) {
         EditorSession session = editors.session(player);
         if (session == null) {
             showTrackList(player, 0, null);
             return;
         }
         if (session.previewing) {
-            showTrack(player, notice("预览中无法取景；请先停止预览.", true));
+            captureFailed(player, onFailure, "预览中无法取景；请先停止预览.");
             return;
         }
         if (!player.getWorld().getName().equals(session.worldName)) {
-            showTrack(player, notice("请先前往轨道所在世界 " + session.worldName + ".", true));
+            captureFailed(player, onFailure, "请先前往轨道所在世界 " + session.worldName + ".");
             return;
         }
         Pose captured;
         try {
             captured = feet ? feetPose(player) : eyePose(player);
         } catch (RuntimeException exception) {
-            showTrack(player, notice(message(exception), true));
+            captureFailed(player, onFailure, message(exception));
             return;
         }
         player.closeDialog();
@@ -1866,16 +2097,29 @@ public final class EditorUI implements Listener {
                 return;
             }
             EditorSession current = editors.session(player);
-            if (current == null || !player.getWorld().getName().equals(current.worldName)) {
+            if (current == null) {
+                showTrackList(player, 0, null);
+                return;
+            }
+            if (!player.getWorld().getName().equals(current.worldName)) {
+                captureFailed(player, onFailure, "请先前往轨道所在世界 " + current.worldName + ".");
                 return;
             }
             try {
                 then.accept(captured);
             } catch (RuntimeException exception) {
-                showTrack(player, notice(message(exception), true));
+                captureFailed(player, onFailure, message(exception));
             }
         }, () -> {
         }, 1L);
+    }
+
+    private void captureFailed(Player player, Consumer<String> onFailure, String text) {
+        if (onFailure != null) {
+            onFailure.accept(text);
+        } else {
+            showTrack(player, notice(text, true));
+        }
     }
 
     private Pose eyePose(Player player) {
@@ -1912,6 +2156,15 @@ public final class EditorUI implements Listener {
 
     private Dialog dialog(Component title, List<DialogBody> body, List<DialogInput> inputs,
                           List<ActionButton> buttons, int columns) {
+        return dialog(title, body, inputs, buttons, columns, closeButton());
+    }
+
+    /**
+     * Builds a dialog with an explicit footer/Esc action. Forms pass a saving exit action so
+     * closing the window cannot drop the fields the player just typed.
+     */
+    private Dialog dialog(Component title, List<DialogBody> body, List<DialogInput> inputs,
+                          List<ActionButton> buttons, int columns, ActionButton exitAction) {
         List<ActionButton> actions = buttons.isEmpty() ? List.of(closeButton()) : buttons;
         return Dialog.create(factory -> factory.empty()
                 .base(DialogBase.builder(title)
@@ -1923,7 +2176,7 @@ public final class EditorUI implements Listener {
                         .build())
                 .type(DialogType.multiAction(actions)
                         .columns(columns)
-                        .exitAction(closeButton())
+                        .exitAction(exitAction)
                         .build()));
     }
 
@@ -1940,7 +2193,40 @@ public final class EditorUI implements Listener {
     }
 
     private ActionButton closeButton() {
-        return button("关闭", "关闭窗口", p -> p.closeDialog());
+        return closeButton("关闭窗口");
+    }
+
+    private ActionButton closeButton(String tooltip) {
+        return button("关闭", tooltip, p -> p.closeDialog());
+    }
+
+    /**
+     * Footer/Esc action of a form: an existing step/effect saves its fields, while an "add" form
+     * closes without creating anything (Esc after opening 添加步骤 still means cancel).
+     */
+    private ActionButton formExitButton(boolean adding, Map<String, String> displayed, String tooltip,
+                                        Function<DialogResponseView, Map<String, String>> reader,
+                                        PendingSave save) {
+        return adding ? closeButton("关闭窗口（不添加）")
+                : saveAndCloseButton(displayed, tooltip, reader, save);
+    }
+
+    /**
+     * Footer/Esc action of a form dialog: persist the fields on screen before the window goes
+     * away. The client submits the current input values with the exit action, so this covers the
+     * footer button and Esc alike. Fields the response does not carry fall back to {@code displayed}
+     * (the values the form opened with), and a response without any values just closes the dialog.
+     */
+    private ActionButton saveAndCloseButton(Map<String, String> displayed, String tooltip,
+                                           Function<DialogResponseView, Map<String, String>> reader,
+                                           PendingSave save) {
+        return formButton("保存并关闭", tooltip, BUTTON_WIDTH, reader, (player, raw) -> {
+            Map<String, String> input = input(raw);
+            boolean blank = input.values().stream().allMatch(value -> value == null || value.isBlank());
+            if (!blank) {
+                save.save(player, merge(displayed, input));
+            }
+        });
     }
 
     private ActionButton button(String label, String tooltip, Consumer<Player> action) {
@@ -1987,6 +2273,66 @@ public final class EditorUI implements Listener {
                 }, CLICK));
     }
 
+    /**
+     * A form action that first persists the fields currently on screen, so a dialog button never
+     * silently drops typed input. 删除 and 取消 are the only actions that throw input away.
+     */
+    @FunctionalInterface
+    private interface PendingSave {
+        SaveOutcome save(Player player, Map<String, String> input);
+    }
+
+    /** What happened to a form's fields when a button asked to persist them. */
+    private enum SaveOutcome {
+        /** The input differed from the stored value and was written. */
+        SAVED,
+        /**
+         * Nothing was written: either the input reproduced the stored value, or the form was
+         * untouched and its displayed text was not even parsed.
+         */
+        UNCHANGED,
+        /** The input was rejected; the form reopened with the error and the action stopped. */
+        FAILED
+    }
+
+    /** Explicit 保存: write through the same dirty check, then run the form's success path. */
+    private void saveExplicitly(Player player, Map<String, String> raw, PendingSave save,
+                                Consumer<Player> then) {
+        if (save.save(player, input(raw)) != SaveOutcome.FAILED) {
+            then.accept(player);
+        }
+    }
+
+    private ActionButton saveAction(String label, String tooltip,
+                                    Function<DialogResponseView, Map<String, String>> reader,
+                                    PendingSave save, BiConsumer<Player, SaveOutcome> then) {
+        return formButton(label, tooltip, BUTTON_WIDTH, reader, (player, raw) -> {
+            SaveOutcome outcome = save.save(player, input(raw));
+            if (outcome != SaveOutcome.FAILED) {
+                then.accept(player, outcome);
+            }
+        });
+    }
+
+    private static Notice savedNotice(SaveOutcome outcome) {
+        return outcome == SaveOutcome.SAVED ? notice("已保存刚才的修改.", false) : null;
+    }
+
+    private static Map<String, String> input(Map<String, String> raw) {
+        return raw == null ? Map.of() : raw;
+    }
+
+    /** True when the dialog still shows exactly the values it was opened with and nothing was staged. */
+    private static boolean untouched(Map<String, String> input, Map<String, String> displayed, boolean staged) {
+        return !staged && input.equals(displayed);
+    }
+
+    /** True when writing {@code step} would reproduce the stored step exactly. */
+    private static boolean alreadyStored(EditorSession session, int index, boolean adding, Step step) {
+        return !adding && session != null && index >= 0 && index < session.draft.steps().size()
+                && step.equals(session.draft.steps().get(index));
+    }
+
     private void onPlayer(Player player, Runnable action) {
         player.getScheduler().execute(plugin, action, () -> {
         }, 0L);
@@ -2007,7 +2353,11 @@ public final class EditorUI implements Listener {
         }
         for (String key : keys) {
             String value = response.getText(key);
-            values.put(key, value == null ? "" : value);
+            if (value != null) {
+                // Keep the difference between "input absent from the response" and "input empty":
+                // absent fields must fall back to their stored/displayed value, never reset it.
+                values.put(key, value);
+            }
         }
         return values;
     }
@@ -2015,7 +2365,11 @@ public final class EditorUI implements Listener {
     private static Map<String, String> readWithBoolean(DialogResponseView response, String boolKey, String... keys) {
         Map<String, String> values = read(response, keys);
         Boolean value = response == null ? null : response.getBoolean(boolKey);
-        values.put(boolKey, String.valueOf(value != null && value));
+        if (value != null) {
+            // Same rule as read(): an absent checkbox falls back to the stored value instead of
+            // turning into "false" and silently flipping the setting.
+            values.put(boolKey, String.valueOf(value));
+        }
         return values;
     }
 
@@ -2253,6 +2607,15 @@ public final class EditorUI implements Listener {
             throw new FormException("这里不能选择 inherit.");
         }
         return sway;
+    }
+
+    /**
+     * Parses the sway field of a response that fell back to the form's defaults for absent keys.
+     * Returns {@code stored} when the field is absent entirely instead of resetting to inherit.
+     */
+    private static SwayPreset swayOrStored(Map<String, String> raw, SwayPreset stored) {
+        String value = raw.get("sway");
+        return value == null ? stored : parseSway(value, true);
     }
 
     private static void validateMiniMessage(String text, String label) {
