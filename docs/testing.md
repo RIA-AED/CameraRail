@@ -18,6 +18,11 @@ mvn test
 - 假玩家镜头的发包计划：head yaw 的 1/256 圈量化（含负角度截断边界）、首次必发与量化值去重、位置/身体包保持 3 tick 节奏。
 - 假玩家镜头硬切重建后的同步节奏：`CameraEntitySync.reset()` 后下一个 tick 重新发送位置与 head yaw，随后恢复 3 tick 位置节奏（`CameraEntitySyncTest.resetRestartsPositionAndHeadSync`）。
 - 入场效果的生效时机：只有从轨道起点开始（真实播放或从起点预览）才施加；从中间步骤开始的预览不施加。
+- 命令层：帮助排版与点击填入（`CommandHelpTest`、`ActionHintTest`）、反馈渲染与参数校验（`EditFeedbackTest`）、
+  Tab 补全（`EditCompletionsTest`）、参数解析（`EditArgumentsTest`）、`add` 尾部参数解释与时长报错文案
+  （`AddStepArgumentsTest`）、动作词汇（`EditActionsTest`）、步骤字段 copy-with 与查询（`StepFieldsTest`）、
+  目标层级路由与 `add` 特例（`EditCommandsTest`、`StepCommandActionsTest`）；
+  命令层拆分只移动代码，命令、文案、点击与补全行为由这些测试回归锁定。
 
 ## Paper 26.1.2 冒烟测试
 

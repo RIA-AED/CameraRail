@@ -144,28 +144,70 @@ Dialog 的页面结构：
   插入。
 - 轨道级 `list` 列出步骤，每行携带该步骤目标的点击事件，点击即填入 `<轨道>:<步骤>`，“先看再改”因此不需要
   额外的选中状态；路径步骤的 `point list` 同理。
-- 命令层负责参数解析（枚举、整数、坐标、范围夹取）、权限检查、消息，以及目标定位（轨道/步骤/路径点/
-  入场效果序号是否存在）；步骤数、总时长、`wait` 信号唯一、路径点上限、MiniMessage 严格解析、轨道
-  id 与世界不可变等结构性校验集中在纯 Java 的 `TrackRules`（id 规则来自 `TrackId`，strict MiniMessage
-  来自 `MiniMessages`），命令侧与 Dialog 侧共用同一套规则，只在错误文案包装上各自处理：命令层越界时用
-  `messages.yml` 文案，`TrackRules`/`EditService` 返回内部错误文本由调用方展示。
+- 编辑命令的参数解析集中在 `EditArguments`（纯函数），消息与提示集中在 `EditFeedback`，权限检查在
+  `CameraCommand`，目标定位与动作实现由 `EditCommands` 路由到各层处理器；步骤数、总时长、`wait` 信号
+  唯一、路径点上限、MiniMessage 严格解析、轨道 id 与世界不可变等结构性校验集中在纯 Java 的 `TrackRules`
+  （id 规则来自 `TrackId`，strict MiniMessage 来自 `MiniMessages`），命令侧与 Dialog 侧共用同一套规则，
+  只在错误文案包装上各自处理：命令层越界时用 `messages.yml` 文案，`TrackRules`/`EditService` 返回内部错误
+  文本由调用方展示。
+
+### 命令层模块
+
+`edit` 命令族按职责拆成一组只做命令层工作的类，彼此通过小的接口衔接，行为与拆分前一致：
+
+- `CameraCommand`：根命令入口。`onCommand` 只做根分发（`help`/`list`/`info`/`play`/`stop`/`advance`/
+  `reload`/`create`/`delete`/`editor`/`tools`/`edit`）；`edit()` 负责权限、玩家检查与目标解析，然后构造
+  这次调用共享的 `EditFeedback` 与 `EditContext`；`onTabComplete` 直接委托 `EditCompletions.complete`。
+- `EditCommands`：编辑命令的路由器。按目标形状把动作分给对应处理器（`Kind.TRACK`/`STEP`/`POINT`），
+  唯一特例是轨道层的 `add <类型>`，由 `AddStepCommands` 处理（`Kind.ADD`）；处理器之间不互相调用。
+- `TrackEditCommands` / `StepEditCommands` / `PointEditCommands`：分别是轨道层、步骤层、路径点层的动作实现
+  （轨道设置与 `entry`、步骤字段与结构动作、路径点操作）。它们只通过 `EditContext` 取依赖，写入统一交给
+  `EditService`。
+- `AddStepCommands`：轨道层 `add` 的七种步骤类型与便捷写法；参数解释（时长边界、可省略的 effect 动作、
+  `title` 两种形式、`wait` 唯一信号名）在纯 Java 的 `AddStepArguments` 里并可单测；除 `wait` 省略信号时
+  自动生成唯一名外，其余默认值与 Dialog 的“添加步骤”一致。
+- `EditEffects`：把效果参数解析成 `EffectSpec`（注册表解析 + ADD 的等级/时长 clamp）。它依赖 Bukkit 注册表，
+  因此不做纯函数单测；未知效果的提示仍由 `EditFeedback.invalidEffect` 发出。
+- `EditFeedback`：`edit` 命令族与 `/camerarail info` 状态视图的命令侧输出——状态与列表渲染、可点击动作行
+  （`actionLines`/`sendActions`）、摘要与类型名，以及 `applied`/`invalidValue`/`invalidEffect`/`requirePose`/
+  `requireInt` 这些“校验并提示”的入口。它由 `edit()` 每次调用构造，保证点击填入使用玩家输入的 alias。
+- `EditCompletions`：全部 Tab 补全，唯一入口是 `complete(sender, args, alias)`；内部按根命令、`edit` 目标与
+  `help edit` 主题分开处理。
+- `EditArguments`：纯参数解析（整数/浮点/布尔/坐标/序号/动作 token），不接触 sender 或消息。
+- `AddStepArguments`：`add <类型>` 尾部的纯参数解释（`duration`/`effectChoice`/`title`/`nextWaitSignal`），
+  非法 token 交给调用方用 `EditFeedback.invalidValue` 报给玩家。
+- `EditActions`：动作词汇——`STRUCTURE_ACTIONS`、`TRACK_ACTIONS`、`POINT_ACTIONS`、各步骤类型的字段动作与
+  类型名，供错误提示与 Tab 补全共用（帮助的条目表在 `CommandHelp`，不依赖它）。
+- `StepFields`：步骤字段的不可变 copy-with 操作（`withDuration`/`withEasing`/`withSway`）与步内查询
+  （`targetPose`/`pathStep`/`pathCount`/`swayName`/`easingName`）。
+- `EditPreview`：`preview` 开关与 `stop` 的统一入口；轨道/步骤处理器用它做 toggle，路径点处理器用它 stop。
+- `EditContext`：一次编辑调用共享的最小依赖（`service`/`repository`/`config`/`messages`/`feedback`/`label`）；
+  不把无关依赖塞进来，处理器需要其它东西时用参数或本地计算。
+
+调用链固定为 `onCommand → edit() → EditCommands.handle → 各层处理器`（轨道层 `add` 直接进
+`AddStepCommands`），补全走 `onTabComplete → EditCompletions.complete`。这次拆分只移动代码、收紧了依赖边界，
+不改变命令语法、文案、点击填入或补全结果；回归由 `CommandHelpTest`、`ActionHintTest`、`EditFeedbackTest`、
+`EditCompletionsTest`、`EditArgumentsTest`、`AddStepArgumentsTest`、`EditActionsTest`、`StepFieldsTest`、
+`EditCommandsTest` 覆盖。
 
 ### 提示、补全与帮助主题
 
-- **可点击动作**：`CameraCommand.actionLines` 把动作行拆成 head、click-to-fill 动作片段和 tail；
-  `sendActions` 负责加前缀并按聊天栏宽度换行（预留前缀与 4 px）。每个片段的点击命令是
+- **可点击动作**：`EditFeedback.actionLines` 把动作行拆成 head、click-to-fill 动作片段和 tail；
+  `EditFeedback.sendActions` 负责加前缀并按聊天栏宽度换行（预留前缀与 4 px）。每个片段的点击命令是
   `/label edit <目标> <动作> `，tail 固定为「详情见 `/label help edit <动作>`」（`editor.actions-hint-tail`）。
-  使用方：步骤/路径点状态（head `editor.actions-hint`）、写错动作（head `editor.wrong-action-head`）、
-  `edit <轨道>` 状态的两行（head `editor.track-hint-head`「步骤与预览」与 `editor.track-settings-head`
-  「轨道设置」，动作集合分别是 list/add/preview/stop/undo/save 与 display/description/start/exit/
-  exit-mode/sway/follow/entry）、`list` 的头部（add/preview）。编辑视图不输出 `/play` 链接：
-  `statusTrack` 走 `sendTrackFields`，只有 `/camerarail info` 的 `sendTrackInfo` 才带 `track.info-preview`。
+  使用方：步骤/路径点状态（`statusStep`/`statusPoint`，head `editor.actions-hint`）、写错动作（`wrongAction`，
+  head `editor.wrong-action-head`）、`edit <轨道>` 状态的两行（`statusTrack`，head `editor.track-hint-head`
+  「步骤与预览」与 `editor.track-settings-head`「轨道设置」，动作集合分别是 list/add/preview/stop/undo/save
+  与 display/description/start/exit/exit-mode/sway/follow/entry）、`list` 的头部（`listSteps`，add/preview）。
+  编辑视图不输出 `/play` 链接：`statusTrack` 走 `sendTrackFields`，只有 `/camerarail info` 的 `infoTrack`
+  才带 `track.info-preview`。
 - **成功提示带目标**：命令层给消息传 `track` 或 `target` 占位符——轨道级 display/description/exit-mode/
   sway（含周期）/follow 等回显轨道 id，步骤级 duration/easing/step-sway/signal/timeout/title/subtitle/
   fade/effect 等回显 `<轨道:步骤>`。
-- **补全规则**：`editCompletion` 在第一个参数精确命中轨道 id 时同时给出 `id:`（可继续补步骤号、路径点号）；
-  路径点目标只有在路径步骤存在且点号有效时才补全动作，否则返回空；`advanceSuggestions` 总是包含 `*`；
-  `editorArguments` 给轨道 id 加上 `close`；`help edit` 补全 `CommandHelp.names(Scope.EDITOR)`。
+- **补全规则**：全部补全在 `EditCompletions`，入口是 `complete(sender, args, alias)`。`editCompletion` 在
+  第一个参数精确命中轨道 id 时同时给出 `id:`（可继续补步骤号、路径点号）；路径点目标只有在路径步骤存在
+  且点号有效时才补全动作，否则返回空；`advanceSuggestions` 总是包含 `*`；`editorArguments` 给轨道 id 加上
+  `close`；`help edit` 补全 `CommandHelp.names(Scope.EDITOR)`。
 - **帮助主题**：`EDITOR_TOPICS`（duration/easing/signal/timeout/subtitle/fade）只出现在 `help edit <字段>`
   的详情页与补全里，不占 overview 行；`Entry.usage` 让 move/path/hold/wait/cut 这些“类型摘要行”的详情用法
   渲染成 `<here|pos|…>` 而不是一条伪命令；`description [说明]`、`title`/`subtitle [文本]` 的方括号表示可省略

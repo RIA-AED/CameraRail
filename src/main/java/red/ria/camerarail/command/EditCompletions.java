@@ -25,7 +25,7 @@ import java.util.function.Supplier;
  * identical to what the help command itself renders, so completion can never offer something the
  * sender is not allowed to see.</p>
  */
-public final class EditCompletions {
+final class EditCompletions {
     private static final List<String> EASING_NAMES = List.of("linear", "ease-in", "ease-out",
             "ease-in-out", "smoothstep", "smootherstep", "sine");
     private static final List<String> STEP_SWAY_NAMES = List.of("inherit", "off", "gentle", "natural", "strong");
@@ -47,12 +47,12 @@ public final class EditCompletions {
     }
 
     /** The completion list for {@code args}; an empty list means "nothing to suggest here". */
-    public List<String> complete(CommandSender sender, String[] args) {
+    public List<String> complete(CommandSender sender, String[] args, String alias) {
         if (!sender.hasPermission("camerarail.command")) {
             return List.of();
         }
-        // The label is only used for rendering; names() (all this module reads) does not use it.
-        CommandHelp help = new CommandHelp(messages.get(), "", sender::hasPermission);
+        // The alias is only used for rendering; names() (all this module reads) does not use it.
+        CommandHelp help = new CommandHelp(messages.get(), alias, sender::hasPermission);
         if (args.length == 1) {
             List<String> names = new ArrayList<>();
             names.add("help");
@@ -118,14 +118,14 @@ public final class EditCompletions {
             if (path == null || target.pointIndex() >= path.points().size()) {
                 return List.of();
             }
-            return args.length == 3 ? partial(args[2], StepFields.POINT_ACTIONS) : List.of();
+            return args.length == 3 ? partial(args[2], EditActions.POINT_ACTIONS) : List.of();
         }
         if (target.hasStep()) {
             if (target.stepIndex() >= track.steps().size()) {
                 return List.of();
             }
             Step step = track.steps().get(target.stepIndex());
-            List<String> actions = StepFields.actions(step);
+            List<String> actions = EditActions.actions(step);
             if (args.length == 3) {
                 return partial(args[2], actions);
             }
@@ -135,9 +135,9 @@ public final class EditCompletions {
             return stepCompletion(step, args);
         }
         if (args.length == 3) {
-            return partial(args[2], StepFields.TRACK_ACTIONS);
+            return partial(args[2], EditActions.TRACK_ACTIONS);
         }
-        if (!StepFields.TRACK_ACTIONS.contains(args[2].toLowerCase(Locale.ROOT))) {
+        if (!EditActions.TRACK_ACTIONS.contains(args[2].toLowerCase(Locale.ROOT))) {
             return List.of();
         }
         return trackCompletion(track, args);

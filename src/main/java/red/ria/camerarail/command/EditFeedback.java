@@ -39,7 +39,7 @@ import java.util.function.Supplier;
  * every click-to-fill hint and usage line mentions the same alias the command was typed with.
  * The class owns the message keys and layout; callers only hand it domain objects.</p>
  */
-public final class EditFeedback {
+final class EditFeedback {
     private static final PlainTextComponentSerializer PLAIN = PlainTextComponentSerializer.plainText();
     private static final Component ACTION_SEPARATOR = Component.text(" · ", NamedTextColor.DARK_GRAY);
 
@@ -71,6 +71,42 @@ public final class EditFeedback {
     /** Reports an unparsable enum/number/boolean the same way every command does. */
     public void invalidValue(CommandSender sender, String raw) {
         messages.get().send(sender, "editor.invalid-value", "value", raw);
+    }
+
+    /**
+     * Parses {@code x y z [yaw] [pitch]} from {@code args[from]}, reporting usage when a
+     * coordinate is missing and the offending token when one is not a number. Omitted yaw/pitch
+     * keep {@code fallback}. Returns {@code null} when the caller must stop.
+     */
+    public Pose requirePose(Player player, EditTarget target, String[] args, int from, Pose fallback,
+                            String syntax) {
+        if (args.length < from + 3) {
+            usage(player, target.display(), syntax);
+            return null;
+        }
+        Pose pose = EditArguments.parsePose(args, from, fallback);
+        if (pose == null) {
+            invalidValue(player, EditArguments.firstInvalidNumber(args, from));
+        }
+        return pose;
+    }
+
+    /**
+     * Parses a required integer token, reporting it as an invalid value when it is not one.
+     * Sign is left to the model: the commands historically accepted negative literals here and
+     * let the model clamp or reject them.
+     */
+    public Integer requireInt(Player player, String raw) {
+        Integer value = EditArguments.parseInt(raw);
+        if (value == null) {
+            invalidValue(player, raw);
+        }
+        return value;
+    }
+
+    /** Reports an unknown effect key; {@link EditEffects} does the registry lookup elsewhere. */
+    public void invalidEffect(CommandSender sender, String key) {
+        messages.get().send(sender, "editor.invalid-effect", "effect", safeText(key));
     }
 
     // ------------------------------------------------------------------ status views
@@ -153,7 +189,7 @@ public final class EditFeedback {
                 "type", stepTypeName(step),
                 "summary", summary(step));
         sendActions(player, target.display(),
-                messages.get().component("editor.actions-hint"), StepFields.actions(step));
+                messages.get().component("editor.actions-hint"), EditActions.actions(step));
         if (step instanceof PathStep path) {
             messages.get().send(player, "editor.path-point-count",
                     "count", String.valueOf(path.points().size()));
@@ -166,7 +202,7 @@ public final class EditFeedback {
                 "x", fmt(pose.x()), "y", fmt(pose.y()), "z", fmt(pose.z()),
                 "yaw", fmt(pose.yaw()), "pitch", fmt(pose.pitch()));
         sendActions(player, target.display(),
-                messages.get().component("editor.actions-hint"), StepFields.POINT_ACTIONS);
+                messages.get().component("editor.actions-hint"), EditActions.POINT_ACTIONS);
     }
 
     /** The step list of a track; each row is click-to-fill. */
@@ -308,7 +344,7 @@ public final class EditFeedback {
 
     /** The command-facing name of this step type. */
     public String stepTypeName(Step step) {
-        return StepFields.name(step);
+        return EditActions.name(step);
     }
 
     public String poseShort(Pose pose) {
@@ -338,104 +374,6 @@ public final class EditFeedback {
 
     private static String easingName(Easing easing) {
         return StepFields.easingName(easing);
-    }
-
-    // ------------------------------------------------------------------ input parsing with feedback
-
-    Integer optionalInt(CommandSender sender, String[] args, int index, int fallback) {
-        if (args.length <= index) {
-            return fallback;
-        }
-        return parseInt(sender, args[index]);
-    }
-
-    Integer optionalDuration(CommandSender sender, String[] args, int index, int fallback, int minimum) {
-        Integer value = optionalInt(sender, args, index, fallback);
-        if (value == null) {
-            return null;
-        }
-        if (value < minimum) {
-            invalidValue(sender, String.valueOf(value));
-            return null;
-        }
-        return value;
-    }
-
-    Integer optionalNonNegativeInt(CommandSender sender, String raw) {
-        return parseInt(sender, raw);
-    }
-
-    Integer positiveIndex(CommandSender sender, String raw) {
-        Integer value = parseInt(sender, raw);
-        if (value == null) {
-            return null;
-        }
-        if (value < 1) {
-            invalidValue(sender, raw);
-            return null;
-        }
-        return value;
-    }
-
-    Integer parseInt(CommandSender sender, String raw) {
-        try {
-            return Integer.parseInt(raw);
-        } catch (NumberFormatException exception) {
-            invalidValue(sender, raw);
-            return null;
-        }
-    }
-
-    Double parseDouble(CommandSender sender, String raw) {
-        try {
-            return Double.parseDouble(raw);
-        } catch (NumberFormatException exception) {
-            invalidValue(sender, raw);
-            return null;
-        }
-    }
-
-    /**
-     * Parses {@code x y z [yaw] [pitch]}; yaw/pitch fall back to the current target or the
-     * player's own rotation when omitted.
-     */
-    Pose parsePose(Player player, String[] args, int from, Pose fallback,
-                   EditTarget target, String syntax) {
-        if (args.length < from + 3) {
-            usage(player, target.display(), syntax);
-            return null;
-        }
-        Double x = parseDouble(player, args[from]);
-        Double y = parseDouble(player, args[from + 1]);
-        Double z = parseDouble(player, args[from + 2]);
-        if (x == null || y == null || z == null) {
-            return null;
-        }
-        float yaw = fallback.yaw();
-        float pitch = fallback.pitch();
-        if (args.length > from + 3) {
-            Double parsed = parseDouble(player, args[from + 3]);
-            if (parsed == null) {
-                return null;
-            }
-            yaw = parsed.floatValue();
-        }
-        if (args.length > from + 4) {
-            Double parsed = parseDouble(player, args[from + 4]);
-            if (parsed == null) {
-                return null;
-            }
-            pitch = parsed.floatValue();
-        }
-        return new Pose(x, y, z, yaw, pitch);
-    }
-
-    static Boolean parseBoolean(String raw) {
-        return switch (raw.trim().toLowerCase(Locale.ROOT)) {
-            case "true", "on", "yes", "1" -> Boolean.TRUE;
-            case "false", "off", "no", "0" -> Boolean.FALSE;
-            default -> null;
-        };
     }
 
     // ------------------------------------------------------------------ clickable actions
