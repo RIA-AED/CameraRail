@@ -1291,20 +1291,26 @@ public final class EditorUI implements Listener {
             showSteps(player, 0, notice("当前选中的不是路径步骤.", true));
             return;
         }
-        if (path.points().size() >= config.get().maxPathPoints()) {
+        PathPoints.Result result = PathPoints.append(session.draft, session.selected, path.points(), pose);
+        if (result.outcome() == PathPoints.Outcome.DUPLICATE) {
+            showPathPoints(player, pageOf(path.points().size() - 1),
+                    notice("与上一个路径点位置相同，未添加.", true));
+            return;
+        }
+        if (PathPoints.exceedsLimit(result, config.get().maxPathPoints())) {
             showPathPoints(player, pageOf(path.points().size() - 1),
                     notice("路径点上限 " + config.get().maxPathPoints() + ".", true));
             return;
         }
-        List<Pose> points = new ArrayList<>(path.points());
-        points.add(pose);
-        PathStep updated = new PathStep(points, path.durationTicks(), path.easing(), path.sway());
+        PathStep updated = new PathStep(result.points(), path.durationTicks(), path.easing(), path.sway());
         String error = commitPath(player, updated);
         if (error != null) {
-            showPathPoints(player, pageOf(points.size() - 1), notice(error, true));
+            showPathPoints(player, pageOf(result.points().size() - 1), notice(error, true));
             return;
         }
-        showPathPoints(player, pageOf(points.size() - 1), notice("已追加路径点.", false));
+        showPathPoints(player, pageOf(result.points().size() - 1),
+                notice(result.outcome() == PathPoints.Outcome.REPLACED_SEED
+                        ? "已添加路径点（创建时的占位点已替换）." : "已追加路径点.", false));
     }
 
     private void showPathPointForm(Player player, int pointIndex, Map<String, String> values, Notice notice) {
@@ -1396,21 +1402,29 @@ public final class EditorUI implements Listener {
     }
 
     private void insertPathPoint(Player player, int pointIndex, Pose pose) {
-        PathStep path = selectedPath(editors.session(player));
+        EditorSession session = editors.session(player);
+        PathStep path = selectedPath(session);
         if (path == null) {
             return;
         }
-        if (path.points().size() >= config.get().maxPathPoints()) {
+        PathPoints.Result result = PathPoints.insert(session.draft, session.selected, path.points(), pointIndex, pose);
+        if (result.outcome() == PathPoints.Outcome.DUPLICATE) {
+            showPathPointForm(player, pointIndex, null, notice("与相邻路径点位置相同，未插入.", true));
+            return;
+        }
+        if (PathPoints.exceedsLimit(result, config.get().maxPathPoints())) {
             showPathPointForm(player, pointIndex, null,
                     notice("路径点上限 " + config.get().maxPathPoints() + ".", true));
             return;
         }
-        List<Pose> points = new ArrayList<>(path.points());
-        points.add(pointIndex + 1, pose);
-        PathStep updated = new PathStep(points, path.durationTicks(), path.easing(), path.sway());
+        PathStep updated = new PathStep(result.points(), path.durationTicks(), path.easing(), path.sway());
         String error = commitPath(player, updated);
         if (error != null) {
             showPathPointForm(player, pointIndex, null, notice(error, true));
+            return;
+        }
+        if (result.outcome() == PathPoints.Outcome.REPLACED_SEED) {
+            showPathPointForm(player, pointIndex, null, notice("已用当前视角替换创建时的占位点.", false));
             return;
         }
         showPathPointForm(player, pointIndex + 1, null, notice("已插入路径点.", false));

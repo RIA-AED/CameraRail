@@ -88,6 +88,8 @@ editor:
   need-duration: "<gray>该步骤需要时长."
   need-path: "<gray>该步骤不是路径."
   path-point-added: "<gray>已向路径追加一个路径点，共 <white>{count}</white> 个."
+  path-point-seeded: "<gray>已添加路径点，创建时与步骤起点重合的占位点已替换."
+  path-point-duplicate: "<gray>与上一个路径点位置相同，未添加路径点."
   path-point-removed: "<gray>已删除路径最后一个点，剩余 <white>{count}</white> 个."
   path-point-min: "<gray>路径至少需要保留一个点."
   path-created: "<gray>已创建路径步骤，请继续用 <white>/camerarail edit point</white> 添加路径点."

@@ -10,6 +10,14 @@ import java.util.List;
  *
  * <p>The first keyframe is the pose the path starts from. The curve is sampled once at
  * construction time, so per-tick evaluation is a binary search and a lerp.</p>
+ *
+ * <p>Position and rotation each get their own centripetal knot spacing. Rotation is measured
+ * as angular travel instead of positional distance: when two keyframes share a position (a
+ * camera pausing to turn, or the track start repeated as the first path point), the positional
+ * gap collapses to {@link #EPSILON} while the view may still change by tens of degrees. Sharing
+ * the positional knots then makes the rotation spline extrapolate from a near-zero interval and
+ * swing hundreds of degrees back and forth in a few ticks, which is visible as the camera
+ * twitching at the start of a path.</p>
  */
 public final class PathCurve {
     private static final int SUBDIVISIONS = 24;
@@ -52,6 +60,10 @@ public final class PathCurve {
             double t1 = t0 + knotDistance(p0, p1);
             double t2 = t1 + knotDistance(p1, p2);
             double t3 = t2 + knotDistance(p2, p3);
+            double r0 = 0.0;
+            double r1 = r0 + rotationKnotDistance(p0, p1);
+            double r2 = r1 + rotationKnotDistance(p1, p2);
+            double r3 = r2 + rotationKnotDistance(p2, p3);
             double yaw0 = unwrappedYaw[Math.max(0, segment - 1)];
             double yaw1 = unwrappedYaw[segment];
             double yaw2 = unwrappedYaw[segment + 1];
@@ -60,11 +72,12 @@ public final class PathCurve {
             for (int sub = 0; sub < SUBDIVISIONS; sub++) {
                 double local = (double) sub / SUBDIVISIONS;
                 double u = t1 + (t2 - t1) * local;
+                double rotation = r1 + (r2 - r1) * local;
                 double x = catmullRom(p0.x(), p1.x(), p2.x(), p3.x(), t0, t1, t2, t3, u);
                 double y = catmullRom(p0.y(), p1.y(), p2.y(), p3.y(), t0, t1, t2, t3, u);
                 double z = catmullRom(p0.z(), p1.z(), p2.z(), p3.z(), t0, t1, t2, t3, u);
-                double yaw = catmullRom(yaw0, yaw1, yaw2, yaw3, t0, t1, t2, t3, u);
-                double pitch = catmullRom(p0.pitch(), p1.pitch(), p2.pitch(), p3.pitch(), t0, t1, t2, t3, u);
+                double yaw = catmullRom(yaw0, yaw1, yaw2, yaw3, r0, r1, r2, r3, rotation);
+                double pitch = catmullRom(p0.pitch(), p1.pitch(), p2.pitch(), p3.pitch(), r0, r1, r2, r3, rotation);
 
                 if (output == 0) {
                     Pose first = keyframes.getFirst();
@@ -178,6 +191,18 @@ public final class PathCurve {
 
     private static double knotDistance(Pose a, Pose b) {
         return Math.max(EPSILON, Math.pow(Math.sqrt(a.distanceSquared(b)), ALPHA));
+    }
+
+    /**
+     * Centripetal knot spacing for the rotation channels, measured in degrees of angular
+     * travel (shortest yaw and pitch, combined with {@link Math#hypot(double, double)})
+     * rather than in blocks. Keeps the rotation splines conditioned when the camera rotates
+     * without moving; see the class documentation.
+     */
+    private static double rotationKnotDistance(Pose a, Pose b) {
+        double yaw = Pose.shortestYawDelta(a.yaw(), b.yaw());
+        double pitch = b.pitch() - a.pitch();
+        return Math.max(EPSILON, Math.pow(Math.hypot(yaw, pitch), ALPHA));
     }
 
     private static double catmullRom(

@@ -314,19 +314,24 @@ public final class EditorManager implements Listener {
             messages.get().send(player, "editor.need-path");
             return;
         }
-        if (path.points().size() >= config.get().maxPathPoints()) {
-            messages.get().send(player, "editor.invalid-value", "value", "路径点数量已达上限");
-            return;
-        }
         Pose pose = eyePose(player);
         if (pose == null) {
             return;
         }
-        List<Pose> points = new ArrayList<>(path.points());
-        points.add(pose);
-        replaceSelected(player, session, new PathStep(points, path.durationTicks(), path.easing(), path.sway()),
-                false);
-        messages.get().send(player, "editor.path-point-added", "count", String.valueOf(points.size()));
+        PathPoints.Result result = PathPoints.append(session.draft, session.selected, path.points(), pose);
+        if (result.outcome() == PathPoints.Outcome.DUPLICATE) {
+            messages.get().send(player, "editor.path-point-duplicate");
+            return;
+        }
+        if (PathPoints.exceedsLimit(result, config.get().maxPathPoints())) {
+            messages.get().send(player, "editor.invalid-value", "value", "路径点数量已达上限");
+            return;
+        }
+        replaceSelected(player, session, new PathStep(result.points(), path.durationTicks(), path.easing(),
+                path.sway()), false);
+        messages.get().send(player, result.outcome() == PathPoints.Outcome.REPLACED_SEED
+                        ? "editor.path-point-seeded" : "editor.path-point-added",
+                "count", String.valueOf(result.points().size()));
     }
 
     public void removePathPoint(Player player) {
@@ -456,18 +461,31 @@ public final class EditorManager implements Listener {
         if (pose == null) {
             return;
         }
+        if (step instanceof PathStep path) {
+            // "here" appends a waypoint to a path, so it needs the same duplicate guard as
+            // /camerarail edit point; otherwise it can still write a point on top of the step
+            // start right after the path was created in place.
+            PathPoints.Result result = PathPoints.append(session.draft, session.selected, path.points(), pose);
+            if (result.outcome() == PathPoints.Outcome.DUPLICATE) {
+                messages.get().send(player, "editor.path-point-duplicate");
+                return;
+            }
+            if (PathPoints.exceedsLimit(result, config.get().maxPathPoints())) {
+                messages.get().send(player, "editor.invalid-value", "value", "路径点数量已达上限");
+                return;
+            }
+            if (!replaceSelected(player, session, new PathStep(result.points(), path.durationTicks(),
+                    path.easing(), path.sway()), false)) {
+                return;
+            }
+            messages.get().send(player, result.outcome() == PathPoints.Outcome.REPLACED_SEED
+                            ? "editor.path-point-seeded" : "editor.path-point-added",
+                    "count", String.valueOf(result.points().size()));
+            return;
+        }
         Step replacement = switch (step) {
             case MoveStep move -> new MoveStep(pose, move.durationTicks(), move.easing(), move.sway());
             case CutStep cut -> new CutStep(pose, cut.durationTicks(), cut.sway());
-            case PathStep path -> {
-                if (path.points().size() >= config.get().maxPathPoints()) {
-                    messages.get().send(player, "editor.invalid-value", "value", "路径点数量已达上限");
-                    yield null;
-                }
-                List<Pose> points = new ArrayList<>(path.points());
-                points.add(pose);
-                yield new PathStep(points, path.durationTicks(), path.easing(), path.sway());
-            }
             default -> null;
         };
         if (replacement == null) {
