@@ -36,14 +36,14 @@ class StepCommandActionsTest {
         assertFields(cut, "here", "pos", "duration", "sway");
         assertFields(title, "title", "subtitle", "fade");
 
-        assertFalse(CameraCommand.stepTypeActions(title).contains("duration"));
-        assertFalse(CameraCommand.stepTypeActions(title).contains("sway"));
-        assertFalse(CameraCommand.stepTypeActions(path).contains("here"));
-        assertFalse(CameraCommand.stepTypeActions(wait).contains("easing"));
+        assertFalse(StepFields.actions(title).contains("duration"));
+        assertFalse(StepFields.actions(title).contains("sway"));
+        assertFalse(StepFields.actions(path).contains("here"));
+        assertFalse(StepFields.actions(wait).contains("easing"));
     }
 
     private static void assertFields(Step step, String... fields) {
-        List<String> actions = CameraCommand.stepTypeActions(step);
+        List<String> actions = StepFields.actions(step);
         for (String field : fields) {
             assertTrue(actions.contains(field), step.type() + " should support " + field + ": " + actions);
         }

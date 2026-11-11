@@ -21,7 +21,7 @@ class ActionHintTest {
     @Test
     void actionChipsWrapInsideTheWidthAndFillTheCommand() {
         List<String> actions = List.of("remove", "duplicate", "up", "down", "preview", "stop");
-        List<Component> lines = CameraCommand.actionLines(
+        List<Component> lines = EditFeedback.actionLines(
                 Component.text("可用动作: "),
                 Component.text(" 详情见 /camerarail help edit"),
                 "camerarail", "login:2", actions, 160);
@@ -40,7 +40,7 @@ class ActionHintTest {
 
     @Test
     void shortActionLinesStayOnOneLine() {
-        List<Component> lines = CameraCommand.actionLines(
+        List<Component> lines = EditFeedback.actionLines(
                 Component.text("可用动作: "), Component.empty(),
                 "camerarail", "login", List.of("add", "preview"), 400);
         assertEquals(1, lines.size(), text(lines));
