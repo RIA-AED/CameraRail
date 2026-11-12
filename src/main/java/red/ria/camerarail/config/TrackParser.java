@@ -378,6 +378,11 @@ public final class TrackParser {
     }
 
     private static ConfigurationSection asSection(Object value, String path) {
+        // A nested YAML mapping is already a ConfigurationSection when it comes from a loaded
+        // file; list entries (steps, points, entry effects) stay raw Maps. Both shapes are valid.
+        if (value instanceof ConfigurationSection section) {
+            return section;
+        }
         if (!(value instanceof Map<?, ?> map)) {
             throw new IllegalArgumentException(path + " must be a YAML mapping");
         }

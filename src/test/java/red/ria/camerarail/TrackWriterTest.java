@@ -96,6 +96,22 @@ class TrackWriterTest {
     }
 
     @Test
+    void roundTripsACustomSwayMap(@TempDir Path tempDir) throws Exception {
+        SwaySettings custom = new SwaySettings(0.03, 0.016, 0.022, 0.28, 0.10, 180, 42L);
+        CameraTrack track = new CameraTrack("custom-sway", "Custom sway", "", "world",
+                new Pose(0, 64, 0, 0, 0), ExitMode.ANIMATION_END, null, custom, false,
+                List.of(), List.of());
+        Path file = tempDir.resolve("tracks.yml");
+        TrackWriter.write(file, Map.of(track.id(), track), CONFIG);
+
+        YamlConfiguration yaml = YamlConfiguration.loadConfiguration(file.toFile());
+        CameraTrack reparsed = new TrackParser(CONFIG).parseTrack("custom-sway",
+                yaml.getConfigurationSection("tracks.custom-sway"));
+
+        assertEquals(custom, reparsed.sway());
+    }
+
+    @Test
     void writesAndReparsesACustomExitPose(@TempDir Path tempDir) throws Exception {
         Pose start = new Pose(0, 64, 0, 0, 0);
         Pose exit = new Pose(1, 65, 2, 90, 0);
