@@ -15,6 +15,26 @@
 `TeleportCause.SPECTATE` 的本体传送；插件会取消该传送并重新锁定镜头，动作栏提示镜头仍在
 锁定中，不再把它当作外部传送而提前结束播放。其他原因的外部传送仍按原策略结束会话。
 
+Paper 的 `ServerPlayer#setCamera` 在每次改变旁观相机目标（包括解除回玩家自身）时也会用同一个
+`SPECTATE` cause 传送本体，因此插件自己的 `Set Camera` 重发、硬切重挂、跨区块跟随重挂和重新
+锁定都会经过上面的拦截。
+`CameraEngine.applyInternalCameraTarget` 把这些调用标记为内部相机切换，`isInternalCameraChange`
+只放行内部标记（或插件自己的内部传送计数）；真实的数字键/旁观菜单传送仍然取消、提示并重新
+锁定。`handleExternalTeleport` 同时忽略内部标记，避免放行后的相机传送被当成外部传送结束会话
+（回归：进入播放/预览约 2 tick 后误报“过场动画中无法离开镜头”）。
+
+## 播放期间的移动检测
+
+Paper 会用客户端移动包校验服务端玩家位置。相机会话期间服务端每 tick 把本体吸附到镜头锚点，
+客户端发不发送移动包与画面无关；不一致会触发 `moved too quickly!` / `moved wrongly!` 并把本体
+传送回去，与镜头跟随互相拉扯（快速运镜、远距离 `cut` 或客户端偶然没有锁上相机时最明显）。
+
+`CameraListener` 监听 Paper 的 `PlayerFailMoveEvent`：只要玩家仍有相机会话
+（`CameraService.isPlaying`，覆盖会话创建到移除，含入场传送与退出还原窗口），就
+`setAllowed(true)` + `setLogWarning(false)`，跳过失败处理并静默日志；移动包仍走 Paper 正常流程
+（`PlayerMoveEvent` 与“Spectator camera did not lock”诊断不受影响）。会话移除后检测立即恢复，
+非会话玩家不受影响。
+
 ## 假玩家镜头（PacketEvents）
 
 安装 PacketEvents 时，插件还会生成一个只存在于该客户端的 PLAYER 实体，并把发往盔甲架的
@@ -300,7 +320,8 @@ Dialog 的页面结构：
 - **ActionBar 循环**：取得工具后为玩家保留一个 10 tick 的 `EntityScheduler` 循环，手持工具时刷新
   ActionBar 显示当前目标与下一步提示（背包/箱子暂存时循环不取消，重新持有后立即点亮）；退出后取消。
   写入成功、重复路径点、超出 `limits.max-path-points`、不在轨道世界、预览中等结果都走 ActionBar，
-  不刷聊天栏。
+  不刷聊天栏。预览会把玩家切成旁观者，旁观者看不到也无法使用手持物品，因此旁观者模式下状态与
+  瞬时提示都不发送（只是静默，不发空 ActionBar 覆盖引擎或其他插件的消息），退出预览后恢复显示。
 - **操作**：取景工具右键调用 `EditService.captureStart`/`captureExit`/`appendPathPoint`；预览工具右键调用
   `EditService.preview`，与命令编辑共用同一套校验、保存与撤销路径。预览开始后玩家被切换为旁观者，
   客户端不会再发送物品交互包，因此“预览中右键停止”不可达；退出预览用 Shift，或执行
