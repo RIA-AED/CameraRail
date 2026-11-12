@@ -5,6 +5,7 @@ import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.format.NamedTextColor;
 import net.kyori.adventure.text.format.TextDecoration;
 import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Player;
@@ -657,6 +658,17 @@ public final class EditorTools implements Listener, ToolSelectorUI.Callback {
         }
     }
 
+    /**
+     * Whether the tools may put their readout on the ActionBar in this game mode. A spectator
+     * (the editor preview switches the player into spectator) can neither see nor use a held
+     * item, so the hint is meaningless there. Staying silent is all this may do: clearing the
+     * ActionBar would wipe the message of the engine or another plugin. An unknown mode keeps
+     * the previous behaviour.
+     */
+    static boolean showsToolActionBar(GameMode gameMode) {
+        return gameMode != GameMode.SPECTATOR;
+    }
+
     private void tickActionBar(Player player, UUID id, ScheduledTask task) {
         if (!player.isOnline()) {
             task.cancel();
@@ -685,6 +697,12 @@ public final class EditorTools implements Listener, ToolSelectorUI.Callback {
             return;
         }
         try {
+            // Spectators (which is what a preview turns the player into) see no held item, so
+            // the tool readout is pure noise; send nothing at all rather than an empty ActionBar
+            // that would overwrite the engine's or another plugin's message.
+            if (!showsToolActionBar(player.getGameMode())) {
+                return;
+            }
             UUID id = player.getUniqueId();
             Flash flash = flashes.get(id);
             if (flash != null) {
@@ -775,6 +793,11 @@ public final class EditorTools implements Listener, ToolSelectorUI.Callback {
 
     private void flash(Player player, Component text) {
         if (!player.isOnline()) {
+            return;
+        }
+        // The same silence as refresh(): skip the immediate send and do not keep the text for
+        // later, so no stale hint pops up once the spectator leaves preview.
+        if (!showsToolActionBar(player.getGameMode())) {
             return;
         }
         flashes.put(player.getUniqueId(), new Flash(text, System.currentTimeMillis() + FLASH_MILLIS));
