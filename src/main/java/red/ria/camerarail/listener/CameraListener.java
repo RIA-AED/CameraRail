@@ -2,6 +2,7 @@ package red.ria.camerarail.listener;
 
 import com.destroystokyo.paper.event.player.PlayerStartSpectatingEntityEvent;
 import com.destroystokyo.paper.event.player.PlayerStopSpectatingEntityEvent;
+import io.papermc.paper.event.player.PlayerFailMoveEvent;
 import red.ria.camerarail.runtime.CameraEngine;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -140,6 +141,30 @@ public final class CameraListener implements Listener {
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onMove(PlayerMoveEvent event) {
         engine.handleClientMove(event.getPlayer());
+    }
+
+    /**
+     * Paper validates every client move packet against the server-side body. While a camera
+     * session runs, the server moves that body itself (the spectator camera follow snaps it
+     * to the camera anchor every tick), so the client's packets are meaningless and only
+     * produce "moved too quickly!" / "moved wrongly!" warnings and position pull-backs.
+     * Absorb the failed-move verdicts for the whole session, from creation through the exit
+     * restore: every reason is just as meaningless while the camera owns the body
+     * ({@code MOVED_TOO_QUICKLY} after a track teleport, {@code MOVED_WRONGLY} or
+     * {@code CLIPPED_INTO_BLOCK} while the body is placed at the camera,
+     * {@code MOVED_INTO_UNLOADED_CHUNK} while the shot outruns the chunks around the body).
+     * Allowing the move keeps Paper's normal processing (including {@link PlayerMoveEvent},
+     * which the camera-lock diagnostics above rely on) and skips only the failure handling.
+     * Players without a session are not touched, and the checks return as soon as the engine
+     * removes the session.
+     */
+    @EventHandler(priority = EventPriority.LOWEST)
+    public void onFailMove(PlayerFailMoveEvent event) {
+        if (!engine.isPlaying(event.getPlayer())) {
+            return;
+        }
+        event.setAllowed(true);
+        event.setLogWarning(false);
     }
 
     @EventHandler(priority = EventPriority.MONITOR)
