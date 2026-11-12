@@ -6,7 +6,7 @@
   <img src="https://img.shields.io/badge/Paper-26.1.2-3d7cc9" alt="Paper 26.1.2">
   <img src="https://img.shields.io/badge/Folia-26.1.2-4caf50" alt="Folia 26.1.2">
   <img src="https://img.shields.io/badge/Java-25-f89820" alt="Java 25">
-  <img src="https://img.shields.io/badge/version-1.1.1-6f42c1" alt="Version 1.1.1">
+  <img src="https://img.shields.io/badge/version-1.2.0-6f42c1" alt="Version 1.2.0">
   <img src="https://img.shields.io/badge/license-MIT-97ca00" alt="License MIT">
 </p>
 
@@ -66,7 +66,7 @@ PacketEvents 用于增强镜头画面，不是必需依赖，插件也不会打�
 
 ## 安装
 
-1. 下载 `CameraRail-1.1.1.jar`，放入服务端的 `plugins/` 目录。
+1. 下载 `CameraRail-1.2.0.jar`，放入服务端的 `plugins/` 目录。
 2. （可选）把 PacketEvents 2.14.0+ 放入同一目录，以获得完整的 FOV 与雾效。
 3. 启动服务器，插件会自动生成默认配置与示例轨道。
 4. 编辑 `plugins/CameraRail/tracks.yml`，或进入游戏执行 `/camerarail editor`（图形编辑器）或 `/camerarail tools`（编辑工具）。
@@ -415,7 +415,7 @@ int reload();
 mvn package
 ```
 
-产物为 `target/CameraRail-1.1.1.jar`。运行 `mvn test` 可执行单元测试。
+产物为 `target/CameraRail-1.2.0.jar`。运行 `mvn test` 可执行单元测试。
 
 ## 反馈
 
