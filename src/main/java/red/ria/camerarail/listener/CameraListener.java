@@ -105,11 +105,22 @@ public final class CameraListener implements Listener {
      * and, without this veto, would be treated as an external teleport and end the shot.
      * The shot stays locked instead; other teleport causes keep the existing "external
      * teleport ends the session" policy.
+     *
+     * <p>Paper raises the very same SPECTATE teleport for the body whenever
+     * {@code ServerPlayer#setCamera} changes the camera, so the plugin's own re-sends and
+     * re-locks go through here too. Those are internal camera changes, not player input:
+     * they must pass through untouched, otherwise entering a shot immediately shows the
+     * "无法离开镜头" hint (issue #3).</p>
      */
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onSpectatorTeleport(PlayerTeleportEvent event) {
-        if (event.getCause() != PlayerTeleportEvent.TeleportCause.SPECTATE
-                || !engine.shouldLockSpectator(event.getPlayer())) {
+        if (event.getCause() != PlayerTeleportEvent.TeleportCause.SPECTATE) {
+            return;
+        }
+        if (engine.isInternalCameraChange(event.getPlayer())) {
+            return;
+        }
+        if (!engine.shouldLockSpectator(event.getPlayer())) {
             return;
         }
         event.setCancelled(true);

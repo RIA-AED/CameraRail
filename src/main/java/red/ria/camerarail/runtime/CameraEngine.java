@@ -609,7 +609,7 @@ public final class CameraEngine implements CameraService {
             // The server-side spectator target stays the armor stand. With the fake camera,
             // PacketEvents rewrites the Set Camera packet to the fake player; the client
             // never needs the armor stand entity at all.
-            player.setSpectatorTarget(camera);
+            applyInternalCameraTarget(session, () -> player.setSpectatorTarget(camera));
         } catch (RuntimeException exception) {
             plugin.getLogger().log(Level.WARNING, "Could not attach spectator camera for " + player.getName(), exception);
             requestEnd(session, EndReason.ERROR, RestoreMode.ORIGINAL, true, true);
@@ -697,18 +697,18 @@ public final class CameraEngine implements CameraService {
                 || !player.getWorld().equals(camera.getWorld())) {
             return;
         }
-        session.internalSpectatorChange = true;
         beginInternalTeleport(session, 300L);
         try {
-            player.setSpectatorTarget(null);
-            player.setSpectatorTarget(camera);
+            applyInternalCameraTarget(session, () -> {
+                player.setSpectatorTarget(null);
+                player.setSpectatorTarget(camera);
+            });
         } catch (RuntimeException exception) {
             // A listener vetoed one of the calls; a later resend or tick retries.
             if (config.get().debug()) {
                 plugin.getLogger().log(Level.FINE, "Camera re-send failed for " + player.getName(), exception);
             }
         } finally {
-            session.internalSpectatorChange = false;
             endInternalTeleport(session);
         }
     }
@@ -799,17 +799,14 @@ public final class CameraEngine implements CameraService {
             return;
         }
         Player player = session.player;
-        session.internalSpectatorChange = true;
         try {
-            player.setSpectatorTarget(null);
+            applyInternalCameraTarget(session, () -> player.setSpectatorTarget(null));
         } catch (RuntimeException exception) {
             // The client may already have dropped the camera; the body snap below still
             // shows the cut pose.
             if (config.get().debug()) {
                 plugin.getLogger().log(Level.FINE, "Could not detach the camera for a hard cut", exception);
             }
-        } finally {
-            session.internalSpectatorChange = false;
         }
         Location feet = ExitPlacement.feet(session.world, target, player.getEyeHeight());
         feet.setYaw(target.yaw());
@@ -932,16 +929,13 @@ public final class CameraEngine implements CameraService {
             // Fallback camera: the client resolves Set Camera against its own entity list.
             player.showEntity(plugin, camera);
         }
-        session.internalSpectatorChange = true;
         try {
-            player.setSpectatorTarget(camera);
+            applyInternalCameraTarget(session, () -> player.setSpectatorTarget(camera));
         } catch (RuntimeException exception) {
             plugin.getLogger().log(Level.WARNING,
                     "Could not re-attach the camera after a hard cut for " + player.getName(), exception);
             requestEnd(session, EndReason.ERROR, RestoreMode.ORIGINAL, true, true);
             return;
-        } finally {
-            session.internalSpectatorChange = false;
         }
         if (player.getSpectatorTarget() != camera) {
             scheduleCameraResend(session, 1L);
@@ -1452,7 +1446,8 @@ public final class CameraEngine implements CameraService {
                                     && session.cutSwitch == 0
                                     && player.getSpectatorTarget() != session.camera) {
                                 try {
-                                    player.setSpectatorTarget(session.camera);
+                                    applyInternalCameraTarget(session,
+                                            () -> player.setSpectatorTarget(session.camera));
                                 } catch (RuntimeException ignored) {
                                     // A later tick retries.
                                 }
@@ -2097,7 +2092,11 @@ public final class CameraEngine implements CameraService {
 
     public void handleExternalTeleport(Player player) {
         Session session = sessions.get(player.getUniqueId());
-        if (session == null || session.ending.get() || session.internalTeleports.get() > 0) {
+        // The plugin's own camera-target changes are teleports as well: Paper's
+        // ServerPlayer#setCamera teleports the body to the camera with TeleportCause.SPECTATE.
+        // Without the spectator marker those events would end the shot as "external".
+        if (session == null || session.ending.get() || session.internalSpectatorChange
+                || session.internalTeleports.get() > 0) {
             return;
         }
         // Paper can deliver the PlayerTeleportEvent for an async teleport after its future
@@ -2129,11 +2128,52 @@ public final class CameraEngine implements CameraService {
 
     /**
      * True while the plugin itself is re-sending the camera packet, so the spectator events it
-     * triggers are not mistaken for the player trying to leave the camera.
+     * triggers are not mistaken for the player trying to leave the camera. Use
+     * {@link #isInternalCameraChange(Player)} for the body teleport Paper raises for the same
+     * camera changes.
      */
     public boolean isInternalSpectatorChange(Player player) {
         Session session = sessions.get(player.getUniqueId());
         return session != null && session.internalSpectatorChange;
+    }
+
+    /**
+     * Runs one camera-target change the plugin itself performs.
+     *
+     * <p>Paper's {@code ServerPlayer#setCamera} teleports the player's body to the new camera
+     * with {@link PlayerTeleportEvent.TeleportCause#SPECTATE} on every target change. That
+     * teleport is part of locking the shot, not the player leaving it, so every plugin call
+     * must be marked: the listener otherwise reads the event as player input (cancel + "无法
+     * 离开镜头" hint + re-lock), which is the entry false alarm of issue #3.</p>
+     */
+    private void applyInternalCameraTarget(Session session, Runnable change) {
+        session.internalSpectatorChange = true;
+        try {
+            change.run();
+        } finally {
+            session.internalSpectatorChange = false;
+        }
+    }
+
+    /**
+     * Whether a {@code TeleportCause.SPECTATE} event on this player was raised by the plugin's
+     * own camera work (camera re-send, cut re-attach, chunk follow, re-lock) instead of the
+     * player pressing a spectator number key or using the spectator menu.
+     *
+     * <p>Only exact markers are consulted. The time-based teleport grace is deliberately left
+     * out here: a genuine spectator teleport must still be vetoed immediately after entering a
+     * shot, and every camera change the plugin performs is marked around its
+     * {@code setSpectatorTarget} call.</p>
+     */
+    public boolean isInternalCameraChange(Player player) {
+        Session session = sessions.get(player.getUniqueId());
+        return session != null
+                && isInternalCameraChange(session.internalSpectatorChange, session.internalTeleports.get());
+    }
+
+    /** Pure part of {@link #isInternalCameraChange(Player)}, kept testable without a server. */
+    static boolean isInternalCameraChange(boolean internalSpectatorChange, int internalTeleports) {
+        return internalSpectatorChange || internalTeleports > 0;
     }
 
     private void beginInternalTeleport(Session session, long graceMillis) {
@@ -2274,7 +2314,7 @@ public final class CameraEngine implements CameraService {
             player.getScheduler().execute(plugin, () -> {
                 if (isCurrent(session) && !session.ending.get() && session.camera != null) {
                     try {
-                        player.setSpectatorTarget(session.camera);
+                        applyInternalCameraTarget(session, () -> player.setSpectatorTarget(session.camera));
                     } catch (RuntimeException ignored) {
                         // The next camera tick or stop will settle it.
                     }
