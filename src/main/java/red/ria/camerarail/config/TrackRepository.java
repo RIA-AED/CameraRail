@@ -1,6 +1,7 @@
 package red.ria.camerarail.config;
 
 import red.ria.camerarail.model.CameraTrack;
+import red.ria.camerarail.model.TrackId;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 
@@ -17,7 +18,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
+import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -42,6 +45,8 @@ public final class TrackRepository {
     private volatile Map<String, CameraTrack> tracks = Map.of();
     /** Told when a track is deleted, outside the write lock. */
     private volatile Consumer<String> trackDeletedListener;
+    /** Told after a successful rename, outside the write lock: {@code (oldId, newId)}. */
+    private volatile BiConsumer<String, String> trackRenamedListener;
     /**
      * Told after a non-fatal tracks.yml reload, inside the write lock (so listeners run in the
      * same order as writes: write lock, then their own state).
@@ -234,6 +239,99 @@ public final class TrackRepository {
             listener.accept(trackId);
         } catch (RuntimeException exception) {
             logger.log(Level.WARNING, "Track-deleted listener failed for '" + trackId + "'", exception);
+        }
+    }
+
+    /** What happened to one {@link #rename} call. */
+    public enum RenameStatus {
+        RENAMED,
+        /** The source id is unknown. */
+        SOURCE_MISSING,
+        /** Another track already uses the target id. */
+        TARGET_EXISTS,
+        /** The target id does not satisfy {@link TrackId#isValid(String)}. */
+        INVALID_ID,
+        /** The source and target ids are the same. */
+        SAME_ID,
+        /** The caller's precondition vetoed the move (e.g. the track is locked). */
+        REFUSED
+    }
+
+    /** The outcome of a rename; {@code track} is the renamed track only when {@code RENAMED}. */
+    public record RenameResult(RenameStatus status, CameraTrack track) {
+        public boolean renamed() {
+            return status == RenameStatus.RENAMED;
+        }
+    }
+
+    /**
+     * Atomically moves a track from {@code oldId} to {@code newId}: checks the source, the target
+     * and the optional {@code precondition} and rewrites the map under one write lock, so two
+     * callers cannot both claim the same target id. The precondition runs under the same lock and
+     * may vet the move against external state (the Dialog editor's {@code EditorLocks}); returning
+     * {@code false} leaves the map untouched and reports {@link RenameStatus#REFUSED}.
+     *
+     * <p>The rename listener is called outside the write lock after a successful move, in the same
+     * way as the delete listener.</p>
+     */
+    public RenameResult rename(String oldId, String newId, Predicate<CameraTrack> precondition) {
+        String from = oldId == null ? "" : oldId.trim().toLowerCase(Locale.ROOT);
+        String to = TrackId.normalize(newId);
+        if (!TrackId.isValid(to)) {
+            return new RenameResult(RenameStatus.INVALID_ID, null);
+        }
+        if (from.isEmpty()) {
+            return new RenameResult(RenameStatus.SOURCE_MISSING, null);
+        }
+        if (from.equals(to)) {
+            return new RenameResult(RenameStatus.SAME_ID, null);
+        }
+        CameraTrack renamed;
+        synchronized (writeLock) {
+            CameraTrack current = tracks.get(from);
+            if (current == null) {
+                return new RenameResult(RenameStatus.SOURCE_MISSING, null);
+            }
+            if (tracks.containsKey(to)) {
+                return new RenameResult(RenameStatus.TARGET_EXISTS, null);
+            }
+            if (precondition != null && !precondition.test(current)) {
+                return new RenameResult(RenameStatus.REFUSED, null);
+            }
+            renamed = current.withId(to);
+            Map<String, CameraTrack> next = new LinkedHashMap<>(tracks);
+            next.remove(from);
+            next.put(to, renamed);
+            tracks = Map.copyOf(next);
+        }
+        notifyTrackRenamed(from, to);
+        return new RenameResult(RenameStatus.RENAMED, renamed);
+    }
+
+    /** Convenience overload for callers that do not need a precondition. */
+    public RenameResult rename(String oldId, String newId) {
+        return rename(oldId, newId, null);
+    }
+
+    /**
+     * Registers the listener told after a successful rename, outside the write lock. This is how
+     * undo histories and per-player tool selections stop pointing at the old id. The previous
+     * listener is replaced.
+     */
+    public void onTrackRenamed(BiConsumer<String, String> listener) {
+        this.trackRenamedListener = listener;
+    }
+
+    private void notifyTrackRenamed(String oldId, String newId) {
+        BiConsumer<String, String> listener = trackRenamedListener;
+        if (listener == null) {
+            return;
+        }
+        try {
+            listener.accept(oldId, newId);
+        } catch (RuntimeException exception) {
+            logger.log(Level.WARNING, "Track-renamed listener failed for '" + oldId + "' -> '"
+                    + newId + "'", exception);
         }
     }
 

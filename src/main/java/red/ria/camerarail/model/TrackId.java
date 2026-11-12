@@ -1,5 +1,6 @@
 package red.ria.camerarail.model;
 
+import java.util.Locale;
 import java.util.regex.Pattern;
 
 /**
@@ -16,7 +17,15 @@ public final class TrackId {
     private TrackId() {
     }
 
-    /** Whether the already-lower-cased id is legal. */
+    /**
+     * The canonical form of a user-typed id: surrounding whitespace removed and ASCII letters
+     * lower-cased. Returns {@code null} for {@code null} input; an empty result is invalid.
+     */
+    public static String normalize(String rawId) {
+        return rawId == null ? null : rawId.trim().toLowerCase(Locale.ROOT);
+    }
+
+    /** Whether the already-normalized id is legal. */
     public static boolean isValid(String id) {
         return id != null && PATTERN.matcher(id).matches();
     }

@@ -79,6 +79,18 @@ public record CameraTrack(
         return java.util.Collections.unmodifiableSet(signals);
     }
 
+    /**
+     * Returns a copy stored under {@code newId}. A display name that still mirrors the old id
+     * follows the rename; a custom display name is kept. The sway settings (including the seed)
+     * are kept as well: renaming never changes how a camera moves.
+     */
+    public CameraTrack withId(String newId) {
+        String nextId = TrackId.normalize(newId);
+        String nextDisplayName = displayName.equals(id) ? nextId : displayName;
+        return new CameraTrack(nextId, nextDisplayName, description, worldName, start, exitMode, exit,
+                sway, follow, entryEffects, steps);
+    }
+
     public CameraTrack withSteps(List<Step> newSteps) {
         return new CameraTrack(id, displayName, description, worldName, start, exitMode, exit,
                 sway, follow, entryEffects, newSteps);

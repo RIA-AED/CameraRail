@@ -131,7 +131,7 @@ tracks:
 
 编辑命令按 Dialog 的层级组织：目标是命令的第一个固定参数，写作 `<轨道>[:<步骤>[:<路径点>]]`，步骤与路径点编号从 1 开始。第一个参数位置永远按目标解析，所以轨道 id 不需要转义前缀。
 
-- **轨道层** `<轨道>`：轨道整体的设置与集合——`display`、`description`、`start`、`exit`、`exit-mode`、`sway`、`follow`；`entry` 管理入场效果；`list` 列出步骤；`add <类型>` 追加步骤；以及 `preview`、`stop`、`undo`、`save`。`preview` 是开关（预览中再次执行即停止），`stop` 在轨道、步骤、路径点三层都能停止预览。
+- **轨道层** `<轨道>`：轨道整体的设置与集合——`display`、`description`、`start`、`exit`、`exit-mode`、`sway`、`follow`；`id <新 id> confirm` 修改轨道 id（需要 `camerarail.manage`，`display` 改的是显示名称）；`entry` 管理入场效果；`list` 列出步骤；`add <类型>` 追加步骤；以及 `preview`、`stop`、`undo`、`save`。`preview` 是开关（预览中再次执行即停止），`stop` 在轨道、步骤、路径点三层都能停止预览。
 - **步骤层** `<轨道>:<步骤>`：字段由步骤类型决定，与 Dialog 的步骤表单一致。`move` 用 `here`、`pos`、`duration`、`easing`、`sway`；`cut` 用 `here`、`pos`、`duration`、`sway`（硬切没有缓动）；`path` 用 `duration`、`easing`、`sway`、`point`；`hold` 用 `duration`、`sway`；`wait` 用 `signal`、`timeout`、`sway`；`effect` 用 `effect <add|remove> <效果> [等级] [时长]`；`title` 用 `title`、`subtitle`、`fade`。所有步骤还支持 `remove`、`duplicate`、`up`、`down`、`preview`、`stop`。
 - **路径点层** `<轨道>:<步骤>:<路径点>`：`here`、`pos`、`remove`、`up`、`down`、`insert`，以及用于结束预览的 `stop`。
 
@@ -147,6 +147,7 @@ Tab 补全：`edit` 第一参数输入完整轨道 id 时会同时给出 `id:`�
 
 ```text
 /camerarail edit login display 登录过场           # 轨道显示名称
+/camerarail edit login id login-v2 confirm        # 修改轨道 id（旧 id 的引用会失效）
 /camerarail edit login start                      # 起点取当前视角
 /camerarail edit login start 0 100 0 0 10         # 起点显式坐标
 /camerarail edit login sway natural 20            # 轨道默认摇摆与周期
@@ -184,7 +185,7 @@ Tab 补全：`edit` 第一参数输入完整轨道 id 时会同时给出 `id:`�
 | `camerarail.stop` | OP | 停止播放 |
 | `camerarail.advance` | OP | 发送等待信号 |
 | `camerarail.edit` | OP | 使用游戏内编辑器与编辑工具（获取及使用） |
-| `camerarail.manage` | OP | 创建和删除轨道（同时需要 `camerarail.edit`） |
+| `camerarail.manage` | OP | 创建、删除和重命名轨道（同时需要 `camerarail.edit`） |
 | `camerarail.reload` | OP | 重载配置和轨道 |
 
 `camerarail.command` 只允许执行根命令，不会自动包含其他子权限。只需要播放和查看的场景，可以只授予 `camerarail.command` 与 `camerarail.play`，不要授予 `edit`、`manage` 或 `reload`。
@@ -233,7 +234,7 @@ Tab 补全：`edit` 第一参数输入完整轨道 id 时会同时给出 `id:`�
 | `entry-effects` | list | 否 | 进入镜头前施加的效果，只能添加 |
 | `steps` | list | 否 | 有序步骤；可以为空 |
 
-轨道 id 只能包含字母、数字、`-` 和 `_`，最长 64 字符；id 不区分大小写，加载和保存时统一使用小写。所有坐标都是 `world` 中的绝对坐标。
+轨道 id 只能包含字母、数字、`-` 和 `_`，最长 64 字符；id 不区分大小写，加载和保存时统一使用小写。id 可以在 Dialog 编辑器的「轨道设置」里与显示名称一起修改，或执行 `/camerarail edit <轨道> id <新 id> confirm`，`tracks.yml` 的键会同步更新；旧 id 的命令历史、点击链接、外部插件调用和恢复文件不会自动更新。重命名不会改变显示名称（除非显示名称原本就等于旧 id）、摇摆种子或任何镜头数据。所有坐标都是 `world` 中的绝对坐标。
 
 ### 步骤类型
 

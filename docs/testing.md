@@ -14,7 +14,10 @@ mvn test
 - 摇摆零振幅、振幅边界、目标切换渐变、同种子可复现，以及跨 `period` 边界不跳变（单 tick 位移不超过解析上界）。
 - YAML 严格解析、`sway: off` 布尔兼容、重复 wait 信号、越界 pitch。
 - `cut` 停留时长：YAML 解析、省略时默认 0、越界校验、按 0 计入时间轴、写入 round-trip。
-- `tracks.yml` 写入后重新解析的 round-trip。
+- `tracks.yml` 写入后重新解析的 round-trip，含自定义 `sway` map（嵌套 mapping 从文件读出时是
+  `ConfigurationSection`，不是裸 Map）。
+- 重命名：`TrackRepository.rename` 的键迁移、目标占用/源缺失/非法 id/前置拒绝，写入后以新键重新加载；
+  `CameraTrack.withId` 的默认显示名跟随、自定义显示名与摇摆种子保持不变。
 - 假玩家镜头的发包计划：head yaw 的 1/256 圈量化（含负角度截断边界）、首次必发与量化值去重、位置/身体包保持 3 tick 节奏。
 - 假玩家镜头硬切重建后的同步节奏：`CameraEntitySync.reset()` 后下一个 tick 重新发送位置与 head yaw，随后恢复 3 tick 位置节奏（`CameraEntitySyncTest.resetRestartsPositionAndHeadSync`）。
 - 入场效果的生效时机：只有从轨道起点开始（真实播放或从起点预览）才施加；从中间步骤开始的预览不施加。
@@ -135,7 +138,7 @@ java -jar paper-26.1.2-74.jar nogui
 - `/camerarail editor` 打开轨道列表；`/camerarail editor <轨道>` 直接打开该轨道；选择已有轨道、以当前视角新建轨道、分页与刷新正常。
 - Dialog 会话占用轨道时，`/camerarail edit <轨道> <动作>` 被拒绝并提示；`/camerarail editor close` 后同一命令可执行。
 - `/camerarail edit` 不带参数列出动作；`/camerarail help edit`、`/camerarail help edit <动作>` 正常；`edit` 后面第一个参数始终按轨道 id 解析（名为 `help`/`tools` 的轨道也能直接编辑，无需转义）。
-- 轨道层：`display`/`description`/`start`（含 `start x y z [yaw pitch]` 显式坐标）/`exit`/`exit-mode`/`sway`/`follow`/`entry`/`list`/`add`/`preview`/`stop`/`undo`/`save` 都按 Dialog 的轨道设置语义工作；`preview` 是开关（再执行一次即停止），`stop` 在轨道/步骤/路径点层都能停止预览；`entry add darkness 0 100`、`entry set 1 darkness 1 200`、`entry remove 1` 后 Dialog 的入场效果列表同步变化。
+- 轨道层：`display`/`description`/`start`（含 `start x y z [yaw pitch]` 显式坐标）/`exit`/`exit-mode`/`sway`/`follow`/`entry`/`list`/`add`/`preview`/`stop`/`undo`/`save` 都按 Dialog 的轨道设置语义工作；`preview` 是开关（再执行一次即停止），`stop` 在轨道/步骤/路径点层都能停止预览；`entry add darkness 0 100`、`entry set 1 darkness 1 200`、`entry remove 1` 后 Dialog 的入场效果列表同步变化。`id <新 id> confirm` 需要 `camerarail.manage`，第一次执行只返回带命令的确认提示，第二次才改 id；旧 id 的引用不自动更新，成功后的提示会写明。`display` 改的是显示名称，`id` 改的是轨道 id，两者不要混用。
 - 步骤层类型隔离：`title` 步骤只接受 `title`/`subtitle`/`fade`，输入 `duration` 应提示该步骤可用动作；`wait` 接受 `signal`/`timeout`/`sway`；`effect` 接受 `effect add|remove <效果> [等级] [时长]`；`move` 接受 `here`/`pos`/`duration`/`easing`/`sway`；`cut` 接受 `here`/`pos`/`duration`/`sway`（没有缓动）；`path` 接受 `duration`/`easing`/`sway`/`point list|add`；结构动作 `remove`/`duplicate`/`up`/`down`/`preview`/`stop` 每种类型都可用。
 - `add <类型>` 七种类型都能追加：`move`/`path`/`hold`/`wait`/`cut`/`effect`/`title`；省略参数时得到与 Dialog“添加步骤”相同的默认值，追加提示里给出 `<轨道>:<序号>` 和继续编辑的入口。便捷写法：`add move|path|hold [时长]`、`add cut [停留]`、`add wait [信号] [超时]`（省略信号自动生成唯一名 `wait`/`wait2`…）、`add effect [add|remove] [效果] [等级] [时长]`（省略动作视为 add，可直接 `add effect blindness`）、`add title [标题[|副标题]]` 或 `add title <淡入> <停留> <淡出> <标题>[|<副标题>]`。追加后用步骤层字段修改，顺序用 `up`/`down` 调整。
 - 路径点层：`here`、`pos x y z [yaw pitch]`、`remove`、`up`、`down`、`insert` 均可用；`stop` 用于结束预览；与相邻点重合的追加/插入会被拒绝，路径点至少保留一个。
@@ -155,6 +158,12 @@ java -jar paper-26.1.2-74.jar nogui
 - 路径点列表：追加当前视角、逐点编辑、插入、删除、上移/下移；路径点表单的 `<- 上一步`/`下一步 ->` 可在相邻路径点间切换并会先保存编辑框里的坐标（不改变路径点顺序）；表单里的“取当前视角”立即把点击时的视角写进该路径点并提示“已取当前视角并保存.”，“插入当前视角”会先保存当前点再插入；路径点数量上限生效。
 - 重复点防御：创建 `path` 步骤后**原地**“追加当前视角”（与步骤起点位置差 < 0.01 格，对话框切换期间视角被轻微晃动也算）会被判为与上一个点同位置而拒绝，不会新增重合点；先移动/转动到别的位置再追加，会用真实路径点替换创建时的占位点（点数仍为 1）。与相邻路径点位置相同的插入同样被拒绝；`limits.max-path-points: 1` 时替换占位点仍应成功，只有真正增加点数才会报上限。`/camerarail edit <轨道>:<步骤> point add`（命令路径）同样不应写出与起点重合的点；对路径步骤执行 `here` 会被拒绝并列出可用动作。
 - 轨道设置：显示名称、说明、摇摆预设/周期/种子、跟随；自定义摇摆振幅不会被意外覆盖（选择 `custom`）。
+- 重命名 id：轨道设置表单里「显示名称」上方有「轨道 id」字段（仅 `camerarail.manage` 可见）→ 与显示名称
+  一起改 → 保存，`tracks.yml` 的键、列表标签、标题和后续命令目标都变成新 id；显示名称原本等于旧 id 时
+  跟随新 id（表单里显示名未改动时），自定义显示名不变；自定义摇摆（含 seed）在重启后保持一致；重命名后
+  该会话的撤销记录被清空，旧 id 的命令 undo 不再存在；Esc/「保存并关闭」同样会先重命名再写入其他字段。
+- 重命名拒绝：目标 id 已存在、id 非法、id 未变化、轨道正在播放/预览、轨道被其他 Dialog 会话占用时都应
+  提示原因且不修改任何状态；Dialog 会话自身占用时仍可在会话内改名。
 - 用一条最后一点用“取当前视角”保存的轨道播放；第三人称确认 gm3 相机在盔甲架眼高而不是底部，结束后玩家视角不应从脚部升到头部。
 - 退出点：默认“动画结束位置”，也可选“进入前的位置”或“自定义位置”；只有自定义才填脚部坐标。默认模式最终 x/z/yaw/pitch 应与保存点一致（不使用含 sway 的最后一帧），结束瞬间玩家身体应停在镜头最后位置，不应先回到旧身体位置再传送。
 - YAML：不写 `exit-mode` 且不写 `exit` 时按 `animation-end`；旧文件写了 `exit` 但没写模式时仍按 `custom`。

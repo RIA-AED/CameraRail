@@ -67,6 +67,13 @@ class TrackRepositoryTest {
                 SwaySettings.ofPreset(SwayPreset.NATURAL, 160, 1L), false, List.of(), steps);
     }
 
+    private static CameraTrack track(String id, String displayName) {
+        return new CameraTrack(id, displayName, "note", "world", new Pose(1, 2, 3, 0, 0),
+                ExitMode.ANIMATION_END, null,
+                SwaySettings.ofPreset(SwayPreset.GENTLE, 120, 42L), true, List.of(),
+                List.of(new HoldStep(20, SwayPreset.INHERIT)));
+    }
+
     /** A track the writer can serialize back (default sway seed, so it writes a preset name). */
     private static CameraTrack storableTrack(String id) {
         return new CameraTrack(id, id, "", "world", new Pose(1, 2, 3, 0, 0),
@@ -122,6 +129,92 @@ class TrackRepositoryTest {
         assertFalse(repository.delete("login"));
         assertEquals(1, deleted.size());
         assertNull(repository.get("login"));
+    }
+
+    @Test
+    void renameMovesTheKeyAndNotifiesTheListenerOnce() {
+        List<String> renamed = new ArrayList<>();
+        repository.onTrackRenamed((oldId, newId) -> renamed.add(oldId + "->" + newId));
+        repository.upsert(track("login"));
+
+        TrackRepository.RenameResult result = repository.rename("LOGIN", "Intro");
+
+        assertEquals(TrackRepository.RenameStatus.RENAMED, result.status());
+        assertTrue(result.renamed());
+        assertEquals("intro", result.track().id());
+        assertNull(repository.get("login"));
+        assertNotNull(repository.get("intro"));
+        assertEquals("intro", repository.get("intro").displayName(),
+                "a display name that just mirrored the old id follows the rename");
+        assertEquals(List.of("login->intro"), renamed);
+    }
+
+    @Test
+    void renameKeepsACustomNameAndTheSwaySettings() {
+        CameraTrack original = track("login", "登录过场");
+        repository.upsert(original);
+
+        CameraTrack renamed = repository.rename("login", "login-v2").track();
+
+        assertEquals("login-v2", renamed.id());
+        assertEquals("登录过场", renamed.displayName(), "a custom display name is not rewritten");
+        assertEquals(original.sway(), renamed.sway(), "rename keeps the sway seed and amplitudes");
+        assertEquals(original.steps(), renamed.steps());
+        assertEquals(original.description(), renamed.description());
+        assertTrue(renamed.follow());
+    }
+
+    @Test
+    void renameRejectsMissingSourceSameIdInvalidIdAndTakenTarget() {
+        repository.upsert(track("login"));
+        repository.upsert(track("intro"));
+
+        assertEquals(TrackRepository.RenameStatus.SOURCE_MISSING,
+                repository.rename("missing", "other").status());
+        assertEquals(TrackRepository.RenameStatus.SAME_ID,
+                repository.rename("LOGIN", "login").status());
+        assertEquals(TrackRepository.RenameStatus.INVALID_ID,
+                repository.rename("login", "has space").status());
+        assertEquals(TrackRepository.RenameStatus.INVALID_ID,
+                repository.rename("login", "").status());
+        assertEquals(TrackRepository.RenameStatus.TARGET_EXISTS,
+                repository.rename("login", "INTRO").status());
+
+        assertNotNull(repository.get("login"), "a refused rename keeps the source track");
+        assertNotNull(repository.get("intro"));
+    }
+
+    @Test
+    void renamePreconditionVetoesWithoutTouchingTheMap() {
+        repository.upsert(track("login"));
+        List<String> renamed = new ArrayList<>();
+        repository.onTrackRenamed((oldId, newId) -> renamed.add(oldId));
+
+        TrackRepository.RenameResult result = repository.rename("login", "intro", track -> false);
+
+        assertEquals(TrackRepository.RenameStatus.REFUSED, result.status());
+        assertNull(result.track());
+        assertNotNull(repository.get("login"));
+        assertNull(repository.get("intro"));
+        assertTrue(renamed.isEmpty(), "a refused rename must not notify listeners");
+    }
+
+    @Test
+    void renameIsWrittenUnderTheNewYamlKey() throws Exception {
+        repository.upsert(storableTrack("login"));
+        assertEquals(TrackRepository.RenameStatus.RENAMED, repository.rename("login", "intro").status());
+        repository.saveAsync().get(10, TimeUnit.SECONDS);
+
+        TrackRepository reloaded = new TrackRepository(repository.file(), CONFIG, LOGGER);
+        try {
+            LoadReport report = reloaded.loadInitial();
+            assertFalse(report.fatal());
+            assertTrue(report.errors().isEmpty(), String.valueOf(report.errors()));
+            assertNotNull(reloaded.get("intro"));
+            assertNull(reloaded.get("login"));
+        } finally {
+            reloaded.close();
+        }
     }
 
     @Test

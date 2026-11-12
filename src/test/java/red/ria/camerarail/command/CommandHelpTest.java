@@ -26,7 +26,7 @@ class CommandHelpTest {
     private static final Predicate<String> VIEWER = "camerarail.command"::equals;
     private static final int MAX_LINE_WIDTH = ChatText.CHAT_WIDTH - 4;
     private static final List<String> EDITOR_COMMANDS = List.of(
-            "display", "description", "start", "exit", "exit-mode", "sway", "follow",
+            "display", "description", "start", "exit", "exit-mode", "sway", "follow", "id",
             "entry", "list", "add", "remove", "duplicate", "up", "down",
             "move", "path", "hold", "wait", "cut", "effect", "title",
             "point", "here", "pos", "insert", "preview", "stop", "undo", "save");

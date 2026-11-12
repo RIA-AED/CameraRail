@@ -67,6 +67,12 @@ public final class CameraRailPlugin extends JavaPlugin {
         editorUi = new EditorUI(this, editors, tracks, () -> config, () -> messages);
         editorTools = new EditorTools(this, tracks, editService, () -> config, () -> messages,
                 player -> editorUi.open(player));
+        // A renamed track leaves snapshots behind in two places: the command undo stacks (keyed by
+        // the old id) and the per-player tool selections. Both follow the rename through this hook.
+        tracks.onTrackRenamed((oldId, newId) -> {
+            editService.onTrackRenamed(oldId);
+            editorTools.onTrackRenamed(oldId, newId);
+        });
         editorUi.setToolMenu(player -> editorTools.openMenu(player));
         command = new CameraCommand(engine, tracks, editors, editorUi, editService, editorTools,
                 () -> config, () -> messages, this::reloadEverything);

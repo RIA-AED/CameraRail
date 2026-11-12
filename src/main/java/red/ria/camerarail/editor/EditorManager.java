@@ -18,6 +18,7 @@ import red.ria.camerarail.model.Pose;
 import red.ria.camerarail.model.Step;
 import red.ria.camerarail.model.SwayPreset;
 import red.ria.camerarail.model.SwaySettings;
+import red.ria.camerarail.model.TrackId;
 import red.ria.camerarail.runtime.CameraEngine;
 
 import java.util.ArrayList;
@@ -160,6 +161,66 @@ public final class EditorManager implements Listener {
         } finally {
             if (!keepLock) {
                 locks.unlock(id, player.getUniqueId());
+            }
+        }
+    }
+
+    /**
+     * Renames the track of the player's Dialog session. Returns {@code null} on success, or a
+     * user-facing error. The session keeps holding the track under its new id; its undo history is
+     * cleared because every entry snapshots the old id, and re-applying one would resurrect it.
+     */
+    String rename(Player player, String rawNewId) {
+        EditorSession session = editors.get(player.getUniqueId());
+        if (session == null) {
+            return "你当前不在编辑模式.";
+        }
+        if (!player.hasPermission("camerarail.manage")) {
+            return "你没有权限重命名轨道.";
+        }
+        String oldId = session.draft.id();
+        if (session.previewing || engine.isPlaying(player)) {
+            return "预览中无法重命名，请先停止预览.";
+        }
+        if (engine.isTrackInUse(oldId)) {
+            return "轨道正在播放或预览，停止后再重命名.";
+        }
+        String newId = TrackId.normalize(rawNewId);
+        if (!TrackId.isValid(newId)) {
+            return "轨道 id 只能包含小写字母、数字、- 和 _，最长 64 个字符.";
+        }
+        if (newId.equals(oldId)) {
+            return "新 id 与当前 id 相同.";
+        }
+        // Claim the new id before writing, so a Dialog session cannot open a track that is about to
+        // appear under the old id's replacement; the failed path releases it again.
+        if (!locks.tryLock(newId, player.getUniqueId())) {
+            return "轨道 " + newId + " 正在被其他管理员编辑，请稍后再试.";
+        }
+        boolean moved = false;
+        try {
+            TrackRepository.RenameResult renamed = repository.rename(oldId, newId,
+                    track -> locks.lockedBy(oldId, player.getUniqueId()));
+            String error = switch (renamed.status()) {
+                case RENAMED -> null;
+                case SOURCE_MISSING -> "找不到轨道 " + oldId + ".";
+                case TARGET_EXISTS -> "轨道 " + newId + " 已存在.";
+                case SAME_ID -> "新 id 与当前 id 相同.";
+                case INVALID_ID -> "轨道 id 只能包含小写字母、数字、- 和 _，最长 64 个字符.";
+                case REFUSED -> "轨道正在被其他管理员编辑，请稍后再试.";
+            };
+            if (error != null) {
+                return error;
+            }
+            locks.unlock(oldId, player.getUniqueId());
+            session.draft = renamed.track();
+            session.undo.clear();
+            persist(player, repository.saveAsync());
+            moved = true;
+            return null;
+        } finally {
+            if (!moved) {
+                locks.unlock(newId, player.getUniqueId());
             }
         }
     }

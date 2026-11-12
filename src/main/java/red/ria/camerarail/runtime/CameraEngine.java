@@ -118,6 +118,23 @@ public final class CameraEngine implements CameraService {
         return java.util.Collections.unmodifiableSet(new TreeSet<>(tracks.ids()));
     }
 
+    /**
+     * Whether any player is currently playing or previewing this track. Renames refuse while a
+     * session holds a snapshot of the track, because every event and recovery record of that
+     * session carries the id it started with.
+     */
+    public boolean isTrackInUse(String trackId) {
+        if (trackId == null || trackId.isBlank()) {
+            return false;
+        }
+        for (Session session : sessions.values()) {
+            if (session.track.id().equalsIgnoreCase(trackId)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     @Override
     public boolean isPlaying(Player player) {
         return player != null && sessions.containsKey(player.getUniqueId());

@@ -593,6 +593,46 @@ public final class EditorTools implements Listener, ToolSelectorUI.Callback {
         player.sendMessage(gray("已清除" + label + "."));
     }
 
+    // ------------------------------------------------------------------ track identity changes
+
+    /**
+     * Follows a track rename: the selection of every online player that addressed the old id is
+     * moved to the new one, so an open tool cannot keep pointing at an id that may soon be reused
+     * by a new track. Player state is owned by the player's scheduler, so the remap hops there;
+     * callers may run this off the player thread (for example from a command).
+     */
+    public void onTrackRenamed(String oldId, String newId) {
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            player.getScheduler().execute(plugin,
+                    () -> remapSelection(player, oldId, newId), () -> {
+                    }, 0L);
+        }
+    }
+
+    private void remapSelection(Player player, String oldId, String newId) {
+        if (!player.isOnline()) {
+            return;
+        }
+        PlayerState state = states.get(player.getUniqueId());
+        if (state == null) {
+            return;
+        }
+        boolean changed = false;
+        if (state.capture != null && state.capture.trackId().equals(oldId)) {
+            state.capture = new CaptureSelection(state.capture.target(), newId,
+                    state.capture.stepIndex());
+            changed = true;
+        }
+        if (state.preview != null && state.preview.trackId().equals(oldId)) {
+            state.preview = new PreviewSelection(newId, state.preview.stepIndex());
+            changed = true;
+        }
+        if (changed) {
+            flash(player, gray("轨道 id 已更改 · 目标更新为 " + newId));
+            refresh(player);
+        }
+    }
+
     // ------------------------------------------------------------------ action bar
 
     private void ensureActionBar(Player player) {

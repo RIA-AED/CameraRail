@@ -177,6 +177,7 @@ final class EditCompletions {
             case "sway" -> current == 3 ? partial(args[current], TRACK_SWAY_NAMES) : List.of();
             case "exit-mode" -> current == 3 ? partial(args[current], EXIT_MODE_NAMES) : List.of();
             case "follow" -> current == 3 ? partial(args[current], List.of("true", "false")) : List.of();
+            case "id" -> current == 4 ? partial(args[current], List.of("confirm")) : List.of();
             case "add" -> addCompletion(args);
             case "entry" -> entryCompletion(track, args);
             default -> List.of();

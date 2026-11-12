@@ -140,6 +140,7 @@ public final class CommandHelp {
             new Entry("exit-mode", "exit-mode <模式>", Group.SETTINGS, EDIT, Level.TRACK),
             new Entry("sway", "sway <预设> [周期]", Group.SETTINGS, EDIT, Level.TRACK),
             new Entry("follow", "follow <true|false>", Group.SETTINGS, EDIT, Level.TRACK),
+            new Entry("id", "id <新 id> confirm", Group.MANAGE, MANAGE, Level.TRACK),
             new Entry("entry", "entry <list|add|set|remove>", Group.ENTRY, EDIT, Level.TRACK),
             new Entry("list", "list", Group.STEP, EDIT, Level.TRACK),
             new Entry("add", "add <类型> [参数]", Group.STEP, EDIT, Level.TRACK),

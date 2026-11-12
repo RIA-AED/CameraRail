@@ -27,7 +27,8 @@ final class EditActions {
             List.of("remove", "duplicate", "up", "down", "preview", "stop");
     /** Actions of the whole track. */
     static final List<String> TRACK_ACTIONS = List.of("display", "description", "start", "exit",
-            "exit-mode", "sway", "follow", "entry", "list", "add", "preview", "stop", "undo", "save");
+            "exit-mode", "sway", "follow", "id", "entry", "list", "add", "preview", "stop",
+            "undo", "save");
     /** Actions of one path point. */
     static final List<String> POINT_ACTIONS =
             List.of("here", "pos", "remove", "up", "down", "insert", "stop");

@@ -60,7 +60,7 @@ class EditActionsTest {
         assertEquals(List.of("here", "pos", "remove", "up", "down", "insert", "stop"),
                 EditActions.POINT_ACTIONS);
         assertEquals(List.of("display", "description", "start", "exit", "exit-mode", "sway",
-                "follow", "entry", "list", "add", "preview", "stop", "undo", "save"),
+                "follow", "id", "entry", "list", "add", "preview", "stop", "undo", "save"),
                 EditActions.TRACK_ACTIONS);
     }
 }

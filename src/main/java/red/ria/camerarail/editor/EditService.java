@@ -22,6 +22,7 @@ import red.ria.camerarail.model.Pose;
 import red.ria.camerarail.model.Step;
 import red.ria.camerarail.model.SwayPreset;
 import red.ria.camerarail.model.SwaySettings;
+import red.ria.camerarail.model.TrackId;
 import red.ria.camerarail.runtime.CameraEngine;
 
 import java.util.ArrayList;
@@ -169,6 +170,64 @@ public final class EditService implements Listener {
         }
         saveAndReport(player);
         return Result.ok(track, 0);
+    }
+
+    // ------------------------------------------------------------------ track rename
+
+    /**
+     * Renames a track's id. The move is atomic in the repository and is refused while a Dialog
+     * session holds the track or while any player is playing/previewing it; both systems keep
+     * snapshots that carry the id they started with. Renaming is not an undoable edit: the
+     * repository's rename listener drops the old id's undo snapshots so a later undo cannot
+     * resurrect it.
+     */
+    public Result rename(Player player, String trackId, String rawNewId) {
+        String from = trackId == null ? "" : trackId.toLowerCase(Locale.ROOT);
+        String to = TrackId.normalize(rawNewId);
+        if (!TrackId.isValid(to)) {
+            return Result.fail("轨道 id 只能包含小写字母、数字、- 和 _，最长 64 个字符.");
+        }
+        if (from.isEmpty()) {
+            return Result.fail("找不到轨道 " + trackId + ".");
+        }
+        if (to.equals(from)) {
+            return Result.fail("新 id 与当前 id 相同.");
+        }
+        Result locked = lockedFailure(player, from);
+        if (locked != null) {
+            return locked;
+        }
+        if (engine.isTrackInUse(from)) {
+            return Result.fail("轨道 " + from + " 正在播放或预览，停止后再改名.");
+        }
+        TrackRepository.RenameResult renamed;
+        try {
+            // The precondition closes the window between the lock check above and the map write:
+            // a Dialog session that acquires the track after it falls through to a read of the
+            // old id, which blocks on the write lock and then reports "not found" cleanly.
+            renamed = repository.rename(from, to, track -> !locks.locked(from));
+        } catch (RuntimeException exception) {
+            return Result.fail(message(exception));
+        }
+        return switch (renamed.status()) {
+            case RENAMED -> {
+                saveAndReport(player);
+                yield Result.ok(renamed.track(), -1);
+            }
+            case SOURCE_MISSING -> Result.fail("找不到轨道 " + from + ".");
+            case TARGET_EXISTS -> Result.fail("轨道 " + to + " 已存在.");
+            case SAME_ID -> Result.fail("新 id 与当前 id 相同.");
+            case INVALID_ID -> Result.fail("轨道 id 只能包含小写字母、数字、- 和 _，最长 64 个字符.");
+            case REFUSED -> {
+                Result race = lockedFailure(player, from);
+                yield race == null ? Result.fail("轨道正在被使用，无法改名.") : race;
+            }
+        };
+    }
+
+    /** Drops undo entries that point at a renamed track (called by the repository rename hook). */
+    public void onTrackRenamed(String oldId) {
+        forgetTrack(oldId);
     }
 
     // ------------------------------------------------------------------ generic mutations

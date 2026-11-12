@@ -239,8 +239,9 @@ Dialog 的页面结构：
   走同一入口，因此都安全。`tracks.yml` 存在个别解析错误时也返回 `-1`，但其余轨道仍会重载、失败轨道保留
   上一版本，撤销历史随这次非致命重载一起清空。
 - 结构校验只有一处实现：`TrackRules.validate(base, updated, cfg)` 覆盖步骤数、总时长、`wait` 信号唯一、
-  路径点上限、title/subtitle 的 strict MiniMessage、轨道 id 与世界不可变，命令侧与 Dialog 侧都调用它；
-  id 正则与 strict MiniMessage 也分别只在 `TrackId` 与 `MiniMessages` 里定义一次。
+  路径点上限、title/subtitle 的 strict MiniMessage，以及普通编辑必须保持 id 与世界不变（改 id 走独立的
+  `TrackRepository.rename` 事务，见「重命名」一节）；命令侧与 Dialog 侧都调用它，id 正则与 strict
+  MiniMessage 也分别只在 `TrackId` 与 `MiniMessages` 里定义一次。
 - **取景与坐标**：`captureStart`/`captureExit`/`capturePose` 取玩家当前视角或脚下位置，要求玩家与轨道在
   同一世界（预览中也会被拒绝）；`setStartPose`、`setExitPose`、`setPose`（move/cut 目标或路径点）、
   `setPathPointPose` 写入显式坐标，不要求同世界；`setPose` 对 path 步骤报错，路径点走 `setPathPointPose`。
@@ -265,6 +266,27 @@ Dialog 的页面结构：
 - reload 只要 `tracks.reload()` 不是致命失败（文件本身可读），撤销历史就会在仓库写锁内清空——包括“个别轨道解析失败、其余仍重载”的情况；文件完全无法读取（fatal）或被 Dialog 守卫拒绝时历史保留。
   撤销历史只存在内存里，玩家退出（`PlayerQuitEvent`）时清空，不跨重启持久化。
 - Dialog 会话内的撤销是另一条独立的历史（`EditorSession`）。
+
+### 重命名
+
+轨道 id 不只是名字：它是 `tracks.yml` 的键、命令目标、`CameraService` 的参数、编辑锁的键，也是默认摇摆
+种子的来源。因此重命名是一条“换身份”的事务，而不是普通字段编辑；两条入口最终都调用
+`TrackRepository.rename(oldId, newId, precondition)`：
+
+- 仓储在写锁内依次检查源轨道、目标 id 是否可用，再执行可选的 `precondition`（用于拒绝正被 Dialog 会话
+  占用的轨道），然后一次性删除旧键、写入新键。监听器在锁外收到 `(oldId, newId)`。
+- `EditService.rename` 是命令入口（动作名 `id`，与 `display` 区分）：要求 `camerarail.manage`，二次确认；
+  锁检查与播放/预览检查通过后，仓储 precondition 再兜住命令检查与写入之间的并发窗口。旧 id 的
+  `UndoHistory` 条目由仓储监听器清掉，避免之后 undo 复活旧 id。
+- `EditorManager.rename` 是 Dialog 入口：轨道设置表单里「轨道 id」和「显示名称」并排编辑，保存时先执行
+  重命名（会话先 `tryLock(newId)`，改键后换成新轨道草稿、释放旧锁保留新锁、清空会话撤销栈），再把其余
+  字段写回新 id 的草稿。显示名称字段没被改动时，默认显示名跟随新 id；改动过则按输入值写入。Esc /
+  「保存并关闭」走同一条保存路径。
+- `CameraTrack.withId` 只换身份：显示名称原本等于旧 id 时跟随新 id，自定义显示名称和 `sway`（含 seed）
+  保持不变。`TrackRepository.onTrackRenamed` 在插件启动时同时接到 `EditService`（清撤销栈）和
+  `EditorTools`（在玩家调度器上把工具选择改到新 id）。
+- 正在播放/预览的轨道拒绝重命名：`Session` 快照、事件和恢复文件都记录着开始时的 id，改名后无法一致。
+  旧 id 的聊天点击链接与外部调用者不会自动更新，因此成功提示会明确说明。
 
 ### 编辑工具
 

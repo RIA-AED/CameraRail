@@ -85,6 +85,9 @@ editor:
   usage: "<gray>用法: <white>/{label} editor [<轨道>|close]</white>."
   deleted: "<gray>已删除轨道 <white>{track}</white>."
   display-set: "<gray>轨道 <white>{track}</white> 显示名称已更新为 <white>{name}</white>."
+  id-confirm: "<gray>这会修改轨道 id：<white>{track}</white> → <white>{new}</white>. 旧 id 的命令、点击链接和外部插件引用会失效. 再次执行 <white>{command}</white> 确认."
+  id-set: "<gray>已将轨道 <white>{track}</white> 的 id 改为 <white>{new}</white>."
+  id-warning: "<gray>旧 id <white>{old}</white> 的引用不会自动更新；撤销记录已清空."
   sway-set: "<gray>轨道 <white>{track}</white> 默认摇摆已设为 <white>{sway}</white>（周期 <white>{period}t</white>）."
   follow-set: "<gray>轨道 <white>{track}</white> 跟随区块加载已设为 <white>{value}</white>."
   step-sway-set: "<gray>步骤 <white>{target}</white> 摇摆已设为 <white>{sway}</white>."
@@ -279,6 +282,12 @@ help:
         detail: "开启后玩家随镜头移动，附近区块持续加载."
         args:
           - "<true|false> 开启或关闭"
+      id:
+        summary: "修改轨道 id（不是显示名称）"
+        detail: "显示名称仍用 display 修改。需要二次确认；旧 id 的命令历史、点击链接和外部插件引用会失效，编辑器的撤销记录会被清空；正在播放或预览时不能修改."
+        args:
+          - "<新 id> 只含小写字母、数字、- 和 _，最长 64 个字符"
+          - "confirm 确认修改"
       entry:
         summary: "管理入场效果"
         detail: "入场效果只在镜头从起点开始时施加；set/remove 使用 entry list 里的序号."

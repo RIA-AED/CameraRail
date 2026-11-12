@@ -35,6 +35,7 @@ import red.ria.camerarail.model.StepType;
 import red.ria.camerarail.model.SwayPreset;
 import red.ria.camerarail.model.SwaySettings;
 import red.ria.camerarail.model.TitleStep;
+import red.ria.camerarail.model.TrackId;
 import red.ria.camerarail.model.WaitStep;
 import red.ria.camerarail.runtime.ExitPlacement;
 import red.ria.camerarail.runtime.TrackTimeline;
@@ -400,6 +401,10 @@ public final class EditorUI implements Listener {
         }
         CameraTrack track = session.draft;
         session.uiScreen = EditorSession.UiScreen.TRACK_SETTINGS;
+        // The id is the track's identity (YAML key, command target, API argument, editor lock and
+        // sway seed), so changing it is a manage-level operation. It still lives on this form so
+        // the two names of a track are edited side by side; the save path renames first.
+        boolean canRename = player.hasPermission("camerarail.manage");
         SwaySettings sway = track.sway();
         String swaySelected = presetNameOrNull(sway);
         if (swaySelected == null) {
@@ -412,29 +417,41 @@ public final class EditorUI implements Listener {
         defaults.put("period", String.valueOf(sway.period()));
         defaults.put("seed", String.valueOf(sway.seed()));
         defaults.put("follow", String.valueOf(track.follow()));
+        if (canRename) {
+            defaults.put("track_id", track.id());
+        }
         Map<String, String> shown = merge(defaults, values);
-        List<DialogInput> inputs = List.of(
-                textInput("display", "显示名称", value(shown, "display", track.displayName()), 64),
-                multilineInput("description", "说明", value(shown, "description", track.description()), 512),
-                singleOption("sway", "默认摇摆", trackSwayEntries(value(shown, "sway", swaySelected))),
-                textInput("period", "摇摆周期 (tick)", value(shown, "period", String.valueOf(sway.period())), 16),
-                textInput("seed", "摇摆种子", value(shown, "seed", String.valueOf(sway.seed())), 32),
-                DialogInput.bool("follow", text("跟随区块加载", NamedTextColor.GRAY),
-                        Boolean.parseBoolean(value(shown, "follow", String.valueOf(track.follow()))),
-                        "true", "false")
-        );
+        List<DialogInput> inputs = new ArrayList<>();
+        if (canRename) {
+            inputs.add(textInput("track_id", "轨道 id", value(shown, "track_id", track.id()), 64));
+        }
+        inputs.add(textInput("display", "显示名称", value(shown, "display", track.displayName()), 64));
+        inputs.add(multilineInput("description", "说明", value(shown, "description", track.description()), 512));
+        inputs.add(singleOption("sway", "默认摇摆", trackSwayEntries(value(shown, "sway", swaySelected))));
+        inputs.add(textInput("period", "摇摆周期 (tick)", value(shown, "period", String.valueOf(sway.period())), 16));
+        inputs.add(textInput("seed", "摇摆种子", value(shown, "seed", String.valueOf(sway.seed())), 32));
+        inputs.add(DialogInput.bool("follow", text("跟随区块加载", NamedTextColor.GRAY),
+                Boolean.parseBoolean(value(shown, "follow", String.valueOf(track.follow()))),
+                "true", "false"));
         List<ActionButton> buttons = new ArrayList<>();
         Function<DialogResponseView, Map<String, String>> reader =
-                response -> readWithBoolean(response, "follow", "display", "description", "sway", "period", "seed");
+                response -> readWithBoolean(response, "follow", "track_id", "display", "description",
+                        "sway", "period", "seed");
         PendingSave save = (p, raw) -> untouched(raw, shown, values != null)
                 ? SaveOutcome.UNCHANGED : applyTrackSettings(p, raw);
         buttons.add(formButton("保存", "保存上方编辑框中的设置", BUTTON_WIDTH, reader,
                 (p, raw) -> saveExplicitly(p, raw, save,
                         q -> showTrack(q, notice("轨道设置已保存.", false)))));
         buttons.add(button("取消", "放弃上方未保存的输入并回到轨道概览", p -> showTrack(p, null)));
+        List<Component> lines = new ArrayList<>();
+        lines.add(text("世界 " + track.worldName() + " · 单位 tick · custom 保留当前振幅",
+                NamedTextColor.GRAY));
+        if (canRename) {
+            lines.add(text("修改轨道 id 后，旧 id 的命令、点击链接和外部插件引用会失效，撤销记录会被清空.",
+                    NamedTextColor.RED));
+        }
         show(player, dialog(text("轨道设置 · " + track.id(), NamedTextColor.WHITE),
-                body(notice, text("世界 " + track.worldName() + " · 单位 tick · custom 保留当前振幅",
-                        NamedTextColor.GRAY)), inputs, buttons, 1,
+                body(notice, lines.toArray(Component[]::new)), inputs, buttons, 1,
                 saveAndCloseButton(shown, "保存上方设置并关闭窗口（Esc 同效）", reader, save)));
     }
 
@@ -445,7 +462,9 @@ public final class EditorUI implements Listener {
             return SaveOutcome.FAILED;
         }
         try {
-            String display = value(raw, "display", "").trim();
+            String oldId = session.draft.id();
+            String oldDisplay = session.draft.displayName();
+            String display = value(raw, "display", oldDisplay).trim();
             if (display.isEmpty()) {
                 throw new FormException("显示名称不能为空.");
             }
@@ -471,19 +490,37 @@ public final class EditorUI implements Listener {
             boolean follow = raw.containsKey("follow")
                     ? Boolean.parseBoolean(raw.get("follow"))
                     : session.draft.follow();
-            CameraTrack updated = session.draft.withDisplayName(display)
+            String newId = TrackId.normalize(value(raw, "track_id", oldId));
+            if (!TrackId.isValid(newId)) {
+                throw new FormException("轨道 id 只能包含小写字母、数字、- 和 _，最长 64 个字符.");
+            }
+            boolean idChanged = !newId.equals(oldId);
+            if (idChanged) {
+                // Rename first: it validates the id and can fail without leaving the other fields
+                // written under the old id. Every earlier field has been parsed already, so the
+                // only remaining failure is a race (deleted track, competing edit).
+                String error = editors.rename(player, newId);
+                if (error != null) {
+                    throw new FormException(error);
+                }
+            }
+            // If the display field still holds the value the form opened with, keep whatever the
+            // rename did to it (a default display name follows the new id); an edited display name
+            // is applied as typed.
+            String nextDisplay = display.equals(oldDisplay) ? session.draft.displayName() : display;
+            CameraTrack updated = session.draft.withDisplayName(nextDisplay)
                     .withDescription(description)
                     .withSway(nextSway)
                     .withFollow(follow);
-            if (updated.equals(session.draft)) {
-                return SaveOutcome.UNCHANGED;
+            boolean settingsChanged = !updated.equals(session.draft);
+            if (settingsChanged) {
+                String error = editors.applyDraft(player, updated, session.selected);
+                if (error != null) {
+                    showTrackSettings(player, raw, notice(error, true));
+                    return SaveOutcome.FAILED;
+                }
             }
-            String error = editors.applyDraft(player, updated, session.selected);
-            if (error != null) {
-                showTrackSettings(player, raw, notice(error, true));
-                return SaveOutcome.FAILED;
-            }
-            return SaveOutcome.SAVED;
+            return idChanged || settingsChanged ? SaveOutcome.SAVED : SaveOutcome.UNCHANGED;
         } catch (RuntimeException exception) {
             showTrackSettings(player, raw, notice(message(exception), true));
             return SaveOutcome.FAILED;

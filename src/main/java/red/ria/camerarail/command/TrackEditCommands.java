@@ -10,6 +10,7 @@ import red.ria.camerarail.model.ExitMode;
 import red.ria.camerarail.model.Pose;
 import red.ria.camerarail.model.SwayPreset;
 import red.ria.camerarail.model.SwaySettings;
+import red.ria.camerarail.model.TrackId;
 
 import java.util.Arrays;
 import java.util.Locale;
@@ -35,6 +36,7 @@ final class TrackEditCommands {
             case "exit-mode" -> setExitMode(player, track, target, args, context);
             case "sway" -> setTrackSway(player, track, target, args, context);
             case "follow" -> setFollow(player, track, target, args, context);
+            case "id" -> rename(player, track, args, context);
             case "entry" -> entryAction(player, track, target, args, context);
             case "list" -> feedback.listSteps(player, track);
             case "preview" -> EditPreview.toggle(context, player, target);
@@ -202,6 +204,44 @@ final class TrackEditCommands {
         if (feedback.applied(player, result)) {
             context.messages().get().send(player, "editor.follow-set", "track", track.id(),
                     "value", follow ? "开启" : "关闭");
+        }
+    }
+
+    /**
+     * Sets the track id ({@code edit <轨道> id <新 id> confirm}). The action is named after the
+     * field, like {@code display} for the display name, so "id" can never be mistaken for a
+     * display-name edit. It is deliberately a two-step command: every command history entry,
+     * click-to-fill hint and external {@code CameraService} caller that spells the old id stops
+     * matching after the rename, so the confirmation line repeats the consequence and the exact
+     * command.
+     */
+    private void rename(Player player, CameraTrack track, String[] args, EditContext context) {
+        if (!player.hasPermission("camerarail.manage")) {
+            context.messages().get().send(player, "command.no-permission");
+            return;
+        }
+        EditFeedback feedback = context.feedback();
+        if (args.length < 4 || args.length > 5) {
+            feedback.usage(player, track.id(), "id <新 id> confirm");
+            return;
+        }
+        String newId = TrackId.normalize(args[3]);
+        if (!TrackId.isValid(newId)) {
+            context.messages().get().send(player, "manage.invalid-id");
+            return;
+        }
+        if (args.length < 5 || !args[4].equalsIgnoreCase("confirm")) {
+            context.messages().get().send(player, "editor.id-confirm",
+                    "track", track.id(), "new", newId,
+                    "command", "/" + context.label() + " edit " + track.id()
+                            + " id " + newId + " confirm");
+            return;
+        }
+        EditService.Result result = context.service().rename(player, track.id(), newId);
+        if (feedback.applied(player, result)) {
+            context.messages().get().send(player, "editor.id-set",
+                    "track", track.id(), "new", result.track().id());
+            context.messages().get().send(player, "editor.id-warning", "old", track.id());
         }
     }
 
