@@ -67,16 +67,46 @@ java -jar paper-26.1.2-74.jar nogui
 3. `wait` 进入等待，`advance` 后继续并完成。
 4. 自然结束 `CameraTrackEndEvent` 的 `completed=true`，玩家按 `exit-mode` 落点（默认停在镜头最后的位置）并恢复原游戏模式。
 5. 外部 `/tp` 结束会话，日志为 `reason=EXTERNAL_TELEPORT`，不再抢回位置。
-6. 真实 `play` 按 Shift 不会退出镜头（默认策略），玩家保持 `SPECTATOR`。
+6. 真实 `play` 按 Shift 不会退出镜头（默认策略），玩家保持 `SPECTATOR`；按 Shift 会出现一次锁定提示（`camera.locked`，默认「过场动画中无法离开镜头.」，80 tick 节流），会话不结束。
 7. 任何预览（UI“预览此步”/“预览全部”和 `/camerarail edit <轨道> preview`）按 Shift 会结束预览，预览中再次执行 `preview` 或任意层级 `stop` 也会停止；UI 预览结束后回到原来的编辑器界面。
 8. 在镜头中退出，恢复文件保留；重连后回到播放前的位置并收到恢复消息。
 9. `/camerarail reload` 能重新读取编辑后的 `tracks.yml`。
 10. 游戏内编辑：创建、追加、修改目标/时长/摇摆、wait/effect/title、预览、自动保存、重载。
 11. Folia 下使用实体调度器 + `teleportAsync`，镜头和区块跟随可用，无 Folia 线程异常。
 12. 播放开始、相机锁定后 ≤1 tick，被拍摄玩家客户端的定位条消失；`/camerarail stop`、自然结束、退出、外部传送等异常结束后 ≤1 tick 恢复。修改 `session.hide-locator-bar` 后 `/camerarail reload`，播放中的隐藏状态在 20 tick 内跟随配置（背景与命令见 [locator-bar.md](locator-bar.md) 第 9 节）。
-13. Folia 下远距离 `cut`（跨 region）：真实 `play` 不应出现“过场动画中无法离开镜头”动作栏提示，编辑器预览不应提前结束，且会话继续正常播放和退出。假玩家镜头下，服务端日志应出现一条 `Server released the spectator camera ... without a Shift input` INFO（该事件由服务端在镜头实体跨 region 时替换实体、清空旧旁观目标产生，插件不再把它当作 Shift 操作）；盔甲架回退模式的 `cut` 会主动解除并重新锁定相机，因此不产生这条日志，但同样应完整播放。Paper 上同一轨道通常不应出现该日志（镜头实体不会被替换；其他插件或传送路径主动释放相机时仍可能出现，且会走同一条静默重锁分支）。
+13. Folia 下远距离 `cut`（跨 region）：真实 `play` 不应出现“过场动画中无法离开镜头”动作栏提示，编辑器预览不应提前结束，且会话继续正常播放和退出。假玩家镜头下，服务端日志应出现一条 `Server released the spectator camera ... without a Shift input` INFO（该事件由服务端在镜头实体跨 region 时替换实体、清空旧旁观目标产生，插件不再把它当作 Shift 操作）；盔甲架回退模式的 `cut` 会主动解除并重新锁定相机，因此不产生这条日志，但同样应完整播放。Paper 上同一轨道不应出现该日志（镜头实体不会被替换）；并且 Paper 上进入播放/预览本身也不应出现锁定提示——Paper 的 `ServerPlayer#setCamera` 每次设置相机会触发一次 `PlayerTeleportEvent`（cause `SPECTATE`）的本体传送，插件已将自身内部相机切换排除在该提示之外（2026-11-12 Paper 26.1.2 实机验证，见下方「入场锁定提示、旁观者 ActionBar 与移动检测验收」第 1 项）。其他插件或传送路径主动释放相机时仍可能出现静默重锁分支。
 
-上述真实客户端验证是在本地离线测试服完成的；测试脚本属于临时环境，不随插件发布。假玩家镜头是 2026-11 新增的实现，服务端启动和 PacketEvents 注册已冒烟通过，但客户端画面仍需在目标客户端版本上按下一节验收。
+上述真实客户端验证是在本地离线测试服完成的；测试脚本属于临时环境，不随插件发布。假玩家镜头的服务端启动与 PacketEvents 注册已冒烟通过；2026-11-12 已在 Paper 26.1.2-74 + Horizon 客户端（nightly-2026-11-03，Vulkan）上完成客户端画面与相机锁定验证，复跑步骤和证据见下一节与 `server-test/e2e-evidence/README.md`。
+
+## 入场锁定提示、旁观者 ActionBar 与移动检测验收（Paper 26.1.2，2026-11-12）
+
+以下三项已用本地 Paper 26.1.2-74 + 真实客户端（Horizon `nightly-2026-11-03-2944480`）实机验证。
+完整命令序列、逐项日志摘录、基线对照与截图见 `server-test/e2e-evidence/README.md` 的
+「基线复现（2026-11-12，task-4）」和「修复后验证（2026-11-12）」章节（`server-test/` 为本地测试环境，
+已 gitignored，不随插件发布）。
+
+1. **入场不误报锁定提示（#3）**：`/camerarail play <轨道>` 与 `/camerarail edit <轨道> preview` 进入后，
+   相机 attach 后的前 2 tick 内 ActionBar 不应出现 `camera.locked`（默认「过场动画中无法离开镜头.」）；
+   出现即为回归——Paper `ServerPlayer#setCamera` 在设置相机后会把玩家本体以 `PlayerTeleportEvent`
+   （cause `SPECTATE`）传送一次，插件内部的重发相机包/重锁相机曾经被误判成玩家逃跑（修复见 commit `f8012e9`）。
+   同时应验证真实操作仍然生效：真实播放中按 Shift 出现一次该提示（80 tick 节流）且会话不结束；
+   预览中按 Shift 结束预览并回到进入前位置；锁定时真实 SPECTATE 传送（旁观数字键/旁观菜单，或测试插件
+   `SpectateProbe` 的同 cause 传送）仍被取消（`ok=false`）并提示一次、会话不结束。
+2. **旁观者模式不显示编辑工具 ActionBar（#2）**：非旁观者状态持有取景/预览工具时，ActionBar 正常显示
+   「取景工具」「预览工具」「预览目标」等提示；进入播放或 `/camerarail edit <轨道> preview`（玩家为
+   `SPECTATOR`）后，插件应停止发送这些提示——进入前已显示的文本应在约 3 秒内自然淡出，旁观者期间
+   ActionBar 中不应再出现工具文本（尤其「预览中 · 潜行退出预览」）；退出播放/预览、回到原游戏模式并
+   手持工具后，提示应在约 10 tick 内恢复。注意断言时以「插件不再发送新包」为准：进入会话的瞬间客户端
+   仍可能短暂显示进入前的工具文本。
+3. **播放期间不触发 Paper 移动检测（#1）**：正常播放（客户端已锁相机）本身不应出现 `moved too quickly!`。
+   客户端未锁相机时（Set Camera 丢失、被其他插件改写相机等）服务端仍会每 tick 把玩家本体吸附到镜头实体，
+   修复前会刷 `moved too quickly!`（并伴随每 45 tick 的 `Spectator camera did not lock ...`）。修复后
+   相机会话期间应放行 Paper 的 `PlayerFailMoveEvent`（`MOVED_TOO_QUICKLY`/`MOVED_WRONGLY` 等），
+   日志中不再出现 `moved too quickly!`；`Spectator camera did not lock ...` 诊断会保留（它说明客户端
+   确实没锁相机，是预期日志）。复跑手法：测试插件 `server-test/spectate-probe` 的
+   `/spectate-probe camera <玩家> on` 取消出站 `SET_CAMERA`，播放快速大幅移动的测试轨道
+   （`movecheck`：40 tick 后 20 tick 内抬升 300 格），同时按住 W 让客户端持续发移动包；修复前该场景
+   20 秒内出现 19 条 warning（含 1.5 秒内 7 条），修复后为 0 条。
 
 ## 假玩家镜头验证
 
@@ -93,13 +123,14 @@ java -jar paper-26.1.2-74.jar nogui
 9. 跨版本链路（客户端 26.2/26.3 经 ViaVersion 连接 26.1.2）单独测一遍 FOV：假玩家是客户端侧实体，链路可能不转发其属性包；目标环境应使用 26.1.2 原生客户端验收。
 10. 移除 PacketEvents 后重启，确认启动 WARN、GUI 回退状态、`/camerarail edit <轨道> add effect` 的聊天栏提示，以及 `/camerarail play` 时只对相关轨道提示；纯 `nausea` 轨道不应触发这些提示。
 11. Folia 远距离 `cut`（跨 region）后：播放中按 Shift 仍应被锁定（出现一次锁定提示）；预览中按 Shift 仍应结束预览。无 Shift 的服务端释放分支不会被误判为 Shift——假玩家镜头下日志只出现 `Server released the spectator camera ... without a Shift input`，不会出现锁定提示，也不会结束预览；盔甲架回退模式不产生该事件，行为同上。
+12. 播放期间（包括客户端未锁相机、镜头快速移动的场景）不应出现 `moved too quickly!`；未锁相机时只应看到第 45 tick 的 `Spectator camera did not lock ...` 诊断（复跑手法见上一节第 3 项）。
 
 ## 如何判断客户端真的附身了
 
 旁观相机是纯客户端状态，服务端读不回来，但可以观察玩家自身的移动包：客户端一旦锁上旁观相机，`LocalPlayer#sendPosition` 就不再发送任何位置包。
 
-- 镜头移动时控制台**没有** `moved too quickly`，玩家位置跟着镜头走却没有发出移动包 → 附身成功。
-- 控制台持续 `moved too quickly!`、玩家每隔一会儿被瞬移到盔甲架位置 → 客户端没有锁上相机。插件会在第 45 tick 打印 `Spectator camera did not lock for <玩家> (track=...)`。
+- 镜头移动时控制台**没有** `moved too quickly!`（相机会话期间该检测已被插件放行，见「入场锁定提示、旁观者 ActionBar 与移动检测验收」第 3 项），玩家位置跟着镜头走却没有发出移动包 → 附身成功。
+- 客户端没有锁上相机时，插件会在第 45 tick 打印 `Spectator camera did not lock for <玩家> (track=...)`；修复前还会持续 `moved too quickly!` 并把玩家每隔一会儿瞬移回盔甲架位置（`PlayerFailMoveEvent` 在会话期间被放行后这些 warning 不再出现，诊断日志是主要信号）。
 - 排查顺序：客户端版本与协议（ViaVersion/ViaBackwards 之类是否在翻译）、是否有别的插件取消 `PlayerStartSpectatingEntityEvent`、镜头实体是否被别的插件 `hideEntity` 或删除。
 
 只验证“服务端 `getSpectatorTarget()` 是盔甲架”是不够的：这个字段在客户端丢包时同样成立。假玩家模式还要确认客户端**没有**收到盔甲架实体；只有回退模式才应通过 `showEntity` 把盔甲架发给客户端。旁观者能看到 invisible 实体，因此不能靠 `setInvisible(true)` 或 `setVisible(false)` 来隐藏镜头位置的盔甲架。
@@ -117,6 +148,8 @@ java -jar paper-26.1.2-74.jar nogui
 - 硬切补间检查：准备两个画面明显不同的镜头，中间放一个 `cut`。假玩家镜头下按 F3 观察客户端实体列表：硬切瞬间旧 `CamRail...` 实体消失并出现新实体 id，画面在一帧内切到目标镜头，没有滑动过渡；`blindness` 雾等效果应跨硬切保持。盔甲架回退模式下画面同样立即切到目标镜头，约 4 tick 后相机重新锁定；之后按住 W 走 2 秒，玩家本体不应移动（镜头仍锁定）。`debug: true` 时控制台会记录 `hard cut: ...` 行（假玩家实体重建、盔甲架解除/重新锁定）。
 - 硬切后的继续：`cut` 后面的 `hold`/`move` 必须从 `to` 的目标姿态继续，不能从硬切前的姿态插值；随后正常退出并按 `exit-mode` 恢复。
 - 旁观者传送拦截：至少两名玩家在线时，镜头锁定后按数字键 1-9 或使用旁观菜单传送到另一名玩家：会话不应结束（不出现 `EXTERNAL_TELEPORT`），动作栏出现锁定提示（默认 `camera.locked`：“过场动画中无法离开镜头。”，可在 `messages.yml` 修改），镜头被重新锁定；`/tp` 等其他原因的外部传送仍会结束会话。
+- 入场锁定提示：真实播放/预览进入时不应出现「过场动画中无法离开镜头.」；真实播放中按 Shift 应出现一次且不退出镜头，预览中按 Shift 应结束预览并回到进入前位置（回归 #3；2026-11-12 Paper 实机验证，见「入场锁定提示、旁观者 ActionBar 与移动检测验收」第 1 项）。
+- 旁观者 ActionBar：#2 修复后，持有预览工具进入旁观者预览时，工具提示应在约 3 秒内淡出且不再出现；退出预览回到非旁观者后恢复。修复前旁观者期间会每 10 tick 发一次「预览中 · 潜行退出预览」（见同一节第 2 项）。
 - 用 `/camerarail advance <signal>` 推进 wait。
 - 等待超时是否按 `exit-mode` 落点。
 - 真实 `play` 中按 Shift 不会脱离（默认）；`/camerarail edit <轨道> preview` 和编辑器预览中按 Shift 应结束预览（`preview` 是开关，再执行一次同样停止），UI 预览回到原编辑器界面。
