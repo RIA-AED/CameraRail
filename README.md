@@ -18,6 +18,27 @@ CameraRail 是一个面向 **Paper / Folia** 的镜头轨道与过场动画插�
 
 插件只负责镜头本身。登录验证、小游戏流程、正式传送和流程状态切换仍由你现有的插件负责，它们可以通过 `CameraService`、事件或 `/camerarail` 命令与镜头配合，详见 [插件集成](docs/integration.md)。
 
+## 截图
+
+<table style="width:100%">
+<tr>
+<td align="center"><img src="docs/screenshots/01-camera-animation.png" width="100%"><br><sub>基于虚拟玩家实体的旁观视角相机动画，支持至多 7 种步骤类型</sub></td>
+<td align="center"><img src="docs/screenshots/02-easing-algorithms.png" width="100%"><br><sub>多种加速度算法，灵活调整相机移动</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/screenshots/03-potion-effects.png" width="100%"><br><sub>基于药水效果的镜头特效，支持 slowness 模拟的长焦镜头和夜视等效果</sub></td>
+<td align="center"><img src="docs/screenshots/04-dialog-editor.png" width="100%"><br><sub>游戏内 100% 全功能对话框 UI</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/screenshots/05-clickable-help.png" width="100%"><br><sub>全量可点击式帮助文本</sub></td>
+<td align="center"><img src="docs/screenshots/06-tab-completion.png" width="100%"><br><sub>动态参数级命令补全</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/screenshots/07-tool-quick-entry.png" width="100%"><br><sub>手持工具快捷录入</sub></td>
+<td></td>
+</tr>
+</table>
+
 ## 功能特性
 
 - **7 种轨道步骤**：`move`、`path`、`hold`、`wait`、`cut`、`effect`、`title`
